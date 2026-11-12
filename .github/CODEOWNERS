@@ -1,22 +1,24 @@
 # Review routing by area (see docs/CONTRIBUTING.md, "Labels and milestones").
-# The usernames are placeholders until the team is set up. Uncomment each line and
-# replace the placeholder with the area reviewers' GitHub usernames. GitHub never
-# requests review from a PR's own author.
-#
-# Coordinator and protocol
-# /apps/coordinator/            @<coordinator-area>
-# /packages/protocol/           @<coordinator-area>
-#
-# Agent adapter and capability
-# /packages/adapter-claude/     @<adapter-area>
-# /spike/                       @<adapter-area>
-# /docs/capability/             @<adapter-area>
-#
-# Web experience
-# /apps/web/                    @<web-area>
-#
-# Platform, evidence and release (packages/client is reviewed here because tools use it too)
-# /packages/client/             @<infra-area>
-# /tools/                       @<infra-area>
-# /.github/                     @<infra-area>
-# /docs/                        @<infra-area>
+# Every path names two people, so a PR's author is never the only code owner who can
+# approve it (GitHub never requests review from the author). The last matching line wins.
+
+# Fallback: anything not matched below
+*                             @Pranav-0710 @GoutamAdityan @lakshmi-narasimma
+
+# Coordinator and protocol (Goutam's stream; Lakshmi owns the schema issues)
+/apps/coordinator/            @GoutamAdityan @lakshmi-narasimma
+/packages/protocol/           @GoutamAdityan @lakshmi-narasimma
+
+# Agent adapter and capability (Pranav's stream)
+/packages/adapter-claude/     @Pranav-0710 @GoutamAdityan
+/spike/                       @Pranav-0710 @GoutamAdityan
+/docs/capability/             @Pranav-0710 @GoutamAdityan
+
+# Web experience (Lakshmi's stream)
+/apps/web/                    @lakshmi-narasimma @Pranav-0710
+/packages/client/             @lakshmi-narasimma @Pranav-0710
+
+# Platform, checks and release
+/tools/                       @Pranav-0710 @lakshmi-narasimma
+/.github/                     @Pranav-0710 @GoutamAdityan
+/docs/                        @Pranav-0710 @GoutamAdityan @lakshmi-narasimma
