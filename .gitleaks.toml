@@ -1,0 +1,18 @@
+# Gitleaks configuration for the `secret-scan` CI job (.github/workflows/ci.yml).
+# It extends gitleaks' default rules.
+#
+# Allowlist policy (docs/CONTRIBUTING.md, "Checks on every PR"):
+#   - Allowlist only a confirmed false positive, never a real credential. A real leak
+#     is rotated, and the commit is rewritten before merge.
+#   - Each entry carries a comment naming the PR that justified it.
+#   - Prefer the narrowest form: a specific regex or path, never a whole directory.
+#
+# Example entry (uncomment and adapt):
+# [[allowlists]]
+# description = "Fixture public key used in pairing tests (PR #NN)"
+# paths = ['''^packages/protocol/test/fixtures/pairing-public\.pem$''']
+
+title = "Consort gitleaks config"
+
+[extend]
+useDefault = true
