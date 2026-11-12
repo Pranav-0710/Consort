@@ -12,6 +12,7 @@ These documents are Consort's design baseline. They come from planning, research
 6. [ARCHITECTURE_STRESS_TEST.md](ARCHITECTURE_STRESS_TEST.md): findings F01–F12, the 64-row scenario matrix, compound cases and proof gates.
 7. [MULTIPLAYER_COLLABORATION_MODEL.md](MULTIPLAYER_COLLABORATION_MODEL.md) and [MULTIPLAYER_WALKTHROUGH.md](MULTIPLAYER_WALKTHROUGH.md): the collaboration model and one concrete scenario.
 8. [COMPETITIVE_AND_PROBLEM_VALIDATION.md](COMPETITIVE_AND_PROBLEM_VALIDATION.md): competitive overlap and the limits of the evidence. Its integration-first hypothesis is superseded as the overall product direction.
+9. [REASONING_AND_EVIDENCE.md](REASONING_AND_EVIDENCE.md): why the decisions exist, lessons reported from the earlier HiveMind project, and the misleading product stories the protocol is designed to prevent. It explains rationale and does not add requirements.
 
 Then read [TRACEABILITY.md](TRACEABILITY.md) to find the issues that implement each requirement, and [../GLOSSARY.md](../GLOSSARY.md) for the terms.
 
