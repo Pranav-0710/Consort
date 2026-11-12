@@ -1,0 +1,21 @@
+{
+  "name": "@consort/adapter-claude",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local adapter for Claude Code.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@consort/protocol": "0.0.0",
+    "@consort/client": "0.0.0"
+  }
+}

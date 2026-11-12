@@ -1,0 +1,20 @@
+{
+  "name": "@consort/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed coordinator client with stable request IDs, shared by the web app and the tools.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@consort/protocol": "0.0.0"
+  }
+}

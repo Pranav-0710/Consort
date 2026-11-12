@@ -1,0 +1,21 @@
+{
+  "name": "@consort/measure",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Measures reporting overhead and coordination effort.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@consort/protocol": "0.0.0",
+    "@consort/client": "0.0.0"
+  }
+}
