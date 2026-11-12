@@ -1,0 +1,22 @@
+# Review routing by area (see docs/CONTRIBUTING.md, "Labels and milestones").
+# The usernames are placeholders until the team is set up. Uncomment each line and
+# replace the placeholder with the area reviewers' GitHub usernames. GitHub never
+# requests review from a PR's own author.
+#
+# Coordinator and protocol
+# /apps/coordinator/            @<coordinator-area>
+# /packages/protocol/           @<coordinator-area>
+#
+# Agent adapter and capability
+# /packages/adapter-claude/     @<adapter-area>
+# /spike/                       @<adapter-area>
+# /docs/capability/             @<adapter-area>
+#
+# Web experience
+# /apps/web/                    @<web-area>
+#
+# Platform, evidence and release (packages/client is reviewed here because tools use it too)
+# /packages/client/             @<infra-area>
+# /tools/                       @<infra-area>
+# /.github/                     @<infra-area>
+# /docs/                        @<infra-area>
