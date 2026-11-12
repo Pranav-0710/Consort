@@ -1,0 +1,70 @@
+# Enforces one issue, one branch, one PR (docs/CONTRIBUTING.md).
+# "pr-hygiene" is a required status check on main. Do not rename it without updating the ruleset.
+name: PR hygiene
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-hygiene-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-hygiene:
+    name: pr-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$TITLE" | grep -Eq '^(feat|fix|chore|docs|refactor|test): [^ ].*$'; then
+            echo "::error::PR title must be 'type: short description' (types: feat, fix, chore, docs, refactor, test). Got: $TITLE"
+            exit 1
+          fi
+          if [ "${#TITLE}" -gt 72 ]; then
+            echo "::error::PR title is ${#TITLE} characters; keep it at 72 or fewer (it becomes the squash commit message)."
+            exit 1
+          fi
+
+      - name: Check branch name
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if ! printf '%s' "$BRANCH" | grep -Eq '^(feat|fix|chore|docs|refactor|test)/[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$'; then
+            echo "::error::Branch must be 'type/<issue#>-short-slug', e.g. feat/21-device-pairing. Got: $BRANCH"
+            exit 1
+          fi
+
+      - name: Check linked issue
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if ! printf '%s' "$BODY" | grep -Eiq '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+'; then
+            echo "::error::PR body must link its issue with 'Closes #<number>'."
+            exit 1
+          fi
+
+      - name: Check for co-author trailers
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if git log --format=%B "$BASE_SHA..$HEAD_SHA" | grep -Eiq '^[[:space:]]*co-authored-by:'; then
+            echo "::error::A commit in this PR has a Co-authored-by trailer. Reword the commit to remove it."
+            exit 1
+          fi
+          if printf '%s' "$BODY" | grep -Eiq '^[[:space:]]*co-authored-by:'; then
+            echo "::error::Remove the Co-authored-by line from the PR description (it would land in the squash commit)."
+            exit 1
+          fi

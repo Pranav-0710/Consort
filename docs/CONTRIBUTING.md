@@ -64,13 +64,35 @@ Areas are file boundaries, not job titles: anyone can pick up any issue.
 
 `node .github/scripts/bootstrap-repo.mjs` prints the label and milestone set. Run it with `--apply` to create anything missing.
 
+## Checks on every PR
+
+Two workflows run on every PR, and CI also runs on every push to `main`. These five check names are **required status checks** on `main`:
+
+| Check | Workflow | What it enforces |
+|---|---|---|
+| `verify-linux` | `.github/workflows/ci.yml` | `npm ci`, then `format:check`, `lint` (including workspace boundaries), `typecheck`, `test` and `build` on Linux |
+| `verify-windows` | `.github/workflows/ci.yml` | Typecheck and tests for `packages/adapter-claude`, `tools/check-runner` and `spike/harness`, plus the boundary tests, on Windows |
+| `secret-scan` | `.github/workflows/ci.yml` | Gitleaks over the PR's commits; any committed credential fails the build |
+| `doc-links` | `.github/workflows/ci.yml` | Every relative Markdown link in `docs/` and the root Markdown files resolves |
+| `pr-hygiene` | `.github/workflows/pr-hygiene.yml` | Title `type: description` of at most 72 characters, branch `type/<issue#>-slug`, a `Closes #N` line, no `Co-authored-by` trailers |
+
+**Keep these names stable.** Branch protection matches checks by name. Renaming a job makes the old required check wait forever, or silently stops requiring the new one. Rename a check only in a PR that also updates the ruleset.
+
+**Secret allowlist.** `.gitleaks.toml` extends the default gitleaks rules. Add an allowlist entry only for a confirmed false positive, keep it as narrow as possible (one path or regex), and name the PR that justified it in a comment. A real credential is never allowlisted: rotate it and remove it from the branch's history before merge.
+
+Before pushing, you can run everything except the secret scan locally:
+
+```bash
+npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && node .github/scripts/check-links.mjs
+```
+
 ## Repository settings (admin)
 
 Apply these settings to `main` on GitHub, under Settings → Rules or Branch protection:
 
 - Require a pull request before merging, with **1 approval**. Dismiss stale approvals when new commits are pushed.
 - Require review from Code Owners, once CODEOWNERS names real people.
-- Require status checks to pass. The checks are added by #3 (CI and PR hygiene).
+- Require the five status checks listed in "Checks on every PR" to pass.
 - Require conversation resolution before merging.
 - Block force pushes and deletions.
 - Allow **squash merging only**. Use the PR title as the commit message, and delete head branches automatically.
