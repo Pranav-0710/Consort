@@ -1,0 +1,17 @@
+{
+  "name": "@consort/coordinator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker ingress plus one SQLite-backed Durable Object per project.",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@consort/protocol": "0.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1"
+  }
+}
