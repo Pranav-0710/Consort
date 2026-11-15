@@ -1,6 +1,12 @@
 # Reasoning and evidence behind the planning baseline
 
-> Imported from the planning pack. It is edited only to remove handoff notes that were addressed to a specific coding assistant (issue #80), and the rationale is unchanged. "The product owner" refers to the project's owner.
+> Imported from the planning pack and edited for this repository (issue #80). The rationale, tables and evidence are unchanged. The edits:
+>
+> - The title is neutral; it was addressed to a specific coding assistant.
+> - §10, a set of handoff notes to that assistant, is removed.
+> - The reading note no longer points to a handoff file that isn't in the repo.
+> - Instructions phrased as "on the user's behalf" or "this session" are removed or reworded.
+> - "The user" now reads "the product owner".
 
 11 November 2026. Read before treating the specifications as an implementation checklist. This companion explains rationale, historical evidence and unresolved tensions; it does not introduce new accepted functionality or replace detailed contracts.
 

@@ -12,7 +12,6 @@
 # Agent adapter and capability (Pranav's stream)
 /packages/adapter-claude/     @Pranav-0710 @GoutamAdityan
 /spike/                       @Pranav-0710 @GoutamAdityan
-/docs/capability/             @Pranav-0710 @GoutamAdityan
 
 # Web experience (Lakshmi's stream)
 /apps/web/                    @lakshmi-narasimma @Pranav-0710
@@ -22,3 +21,7 @@
 /tools/                       @Pranav-0710 @lakshmi-narasimma
 /.github/                     @Pranav-0710 @GoutamAdityan
 /docs/                        @Pranav-0710 @GoutamAdityan @lakshmi-narasimma
+
+# Capability records (adapter stream). Must stay below /docs/: the last matching line
+# wins, so any rule placed after this one would override it.
+/docs/capability/             @Pranav-0710 @GoutamAdityan

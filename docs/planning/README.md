@@ -26,7 +26,7 @@ Then read [TRACEABILITY.md](TRACEABILITY.md) to find the issues that implement e
 
 ## Changing these documents
 
-These files were imported unchanged. Correct them only through a PR that links the decision record or issue justifying the change. Don't add parallel specifications whose authority is unclear: update the canonical document instead.
+These files were imported unchanged, except where a header note at the top of a file lists its edits. Correct them only through a PR that links the decision record or issue justifying the change. Don't add parallel specifications whose authority is unclear: update the canonical document instead.
 
 ## Trace-ID convention
 
