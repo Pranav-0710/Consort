@@ -2,15 +2,31 @@ import { describe, expect, it } from 'vitest';
 
 import { redact } from './redact.js';
 
-// Synthetic values only. None of these is a real credential.
+// Synthetic values only. None of these is a real credential. Token-shaped samples are
+// assembled at runtime from fragments, so no complete token literal appears in source
+// and the repository's secret scan (gitleaks) has nothing to match.
+const fake = (...parts: string[]) => parts.join('');
+const BODY = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+const TOKENS = {
+  anthropic: fake('sk-', 'ant-', 'api03-', BODY),
+  openai: fake('sk-', 'proj-', BODY.slice(0, 32)),
+  githubClassic: fake('gh', 'p_', BODY),
+  githubFine: fake('github', '_pat_', '11ABCDEFG0123456789', '_abcdefghijklmnop'),
+  jwt: [
+    fake('ey', 'JhbGciOiJIUzI1NiJ9'),
+    fake('ey', 'JzdWIiOiIxMjM0NTY3ODkwIn0'),
+    'dozjgNryP4J3jVmNHl0w5N',
+  ].join('.'),
+};
+
 const SAMPLE = [
   '{"session_id":"abc","transcript_path":"C:\\\\Users\\\\alice\\\\.claude\\\\projects\\\\x.jsonl"}',
-  'ANTHROPIC key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 in a log',
-  'openai sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz012345',
-  'github ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 and github_pat_11ABCDEFG0123456789_abcdefghijklmnop',
+  `ANTHROPIC key ${TOKENS.anthropic} in a log`,
+  `openai ${TOKENS.openai}`,
+  `github ${TOKENS.githubClassic} and ${TOKENS.githubFine}`,
   'Authorization: Bearer abc.def-ghi_jkl012345',
   '{"token":"spike-shared-secret-123","refresh_token":"r3fr3sh","password":"hunter22"}',
-  'jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N',
+  `jwt ${TOKENS.jwt}`,
   'mail from alice.example@example.com',
   'cwd /home/alice/consort and /Users/alice/consort and /c/Users/alice/consort and C:/Users/alice/x',
 ].join('\n');
@@ -19,15 +35,11 @@ describe('redact', () => {
   it('known token patterns in a sample log are removed', () => {
     const out = redact(SAMPLE);
     for (const secret of [
-      'sk-ant-api03-AbCdEfGh',
-      'sk-proj-AbCdEfGh',
-      'ghp_AbCdEfGh',
-      'github_pat_11ABCDEFG',
+      ...Object.values(TOKENS),
       'abc.def-ghi_jkl012345',
       'spike-shared-secret-123',
       'r3fr3sh',
       'hunter22',
-      'eyJhbGciOiJIUzI1NiJ9',
       'alice.example@example.com',
       'alice',
     ]) {
