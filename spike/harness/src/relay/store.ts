@@ -25,6 +25,8 @@ export interface Item {
   to: string;
   body: string;
   replyTo?: string;
+  /** Client-chosen idempotency key, unique per sender. */
+  clientId?: string;
   createdAt: string;
   observations: Observation[];
 }
@@ -35,6 +37,7 @@ export interface NewItem {
   to: string;
   body: string;
   replyTo?: string;
+  clientId?: string;
   version?: number;
 }
 
@@ -54,10 +57,28 @@ export class ItemStore {
   constructor(private readonly file: string) {
     mkdirSync(path.dirname(file), { recursive: true });
     if (existsSync(file)) {
-      for (const line of readFileSync(file, 'utf8').split('\n')) {
-        if (line.trim()) this.apply(JSON.parse(line) as Entry);
-      }
+      const lines = readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => line.trim());
+      lines.forEach((line, index) => {
+        try {
+          this.apply(JSON.parse(line) as Entry);
+        } catch (error) {
+          // A crash mid-append leaves a torn last line: that change never completed, so skip it.
+          // A bad line anywhere else is real corruption and must stop the relay.
+          if (index !== lines.length - 1) throw error;
+          this.skippedTornLine = true;
+        }
+      });
     }
+  }
+
+  /** True when the store file ended in an incomplete line that was ignored on load. */
+  skippedTornLine = false;
+
+  findByClientId(from: string, clientId: string): Item | undefined {
+    for (const item of this.items.values()) if (item.from === from && item.clientId === clientId) return item;
+    return undefined;
   }
 
   create(input: NewItem): Item {
@@ -69,6 +90,7 @@ export class ItemStore {
       to: input.to,
       body: input.body,
       ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+      ...(input.clientId === undefined ? {} : { clientId: input.clientId }),
       createdAt: new Date().toISOString(),
       observations: [],
     };

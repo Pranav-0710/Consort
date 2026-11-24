@@ -6,6 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 import { loadConfig } from '../config.js';
+import { UNTRUSTED_NOTE } from '../format.js';
 import { logEvent } from '../log.js';
 import { RelayClient } from '../relay/client.js';
 import type { Item } from '../relay/store.js';
@@ -74,7 +75,7 @@ server.registerTool(
     run('spike_read_inbox', {}, async () => {
       const items = await relay.list({ to: cfg.participant, pending: true });
       for (const item of items) await relay.observe(item.id, { type: 'read_via_tool' });
-      return items.map(summary);
+      return { note: UNTRUSTED_NOTE, items: items.map(summary) };
     }),
 );
 
@@ -124,6 +125,7 @@ server.registerTool(
   (args) =>
     run('spike_ack', args, async () => {
       const item = await relay.get(args.item_id);
+      if (item.to !== cfg.participant) throw new Error(`item ${item.id} is addressed to ${item.to}`);
       const detail = `version ${args.version}${args.version === item.version ? '' : ` (current is ${item.version})`}${
         args.note ? `: ${args.note}` : ''
       }`;
@@ -143,7 +145,7 @@ if (cfg.listenEnabled) {
         const deadline = Date.now() + Math.min(args.timeout_seconds, cfg.listenMaxSeconds) * 1000;
         while (Date.now() < deadline) {
           const items = await relay.list({ to: cfg.participant, pending: true });
-          if (items.length > 0) return { timedOut: false, items: items.map(summary) };
+          if (items.length > 0) return { timedOut: false, note: UNTRUSTED_NOTE, items: items.map(summary) };
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
         return { timedOut: true, items: [] };

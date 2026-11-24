@@ -3,10 +3,11 @@
 //   option (a): SPIKE_DELIVER_ON lists events that return items as additionalContext
 //   option (b): SPIKE_STOP_DELIVERY lets Stop block once per stop cycle, up to SPIKE_STOP_MAX_PER_SESSION
 // Fails open: on error or after SPIKE_HOOK_DEADLINE_MS it prints nothing and exits 0.
+// "Context supplied" is recorded only after the output has been flushed to stdout.
 import { isHookEvent, loadConfig, type HarnessConfig, type HookEvent } from '../config.js';
-import { formatPendingItems } from '../format.js';
 import { logEvent } from '../log.js';
 import { RelayClient } from '../relay/client.js';
+import { planDelivery, withDeadline, type Delivery } from './decide.js';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -14,40 +15,23 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function decide(cfg: HarnessConfig, event: HookEvent): Promise<object | undefined> {
+interface Decision {
+  sessionId: string;
+  delivery: Delivery | undefined;
+}
+
+async function decide(cfg: HarnessConfig, event: HookEvent, relay: RelayClient): Promise<Decision> {
   const raw = await readStdin();
   const payload = (raw.trim() ? JSON.parse(raw) : {}) as Record<string, unknown>;
   const sessionId = typeof payload['session_id'] === 'string' ? payload['session_id'] : 'unknown';
   logEvent(cfg, 'hooks', { event, sessionId, payload });
+  return { sessionId, delivery: await planDelivery(cfg, event, payload, relay) };
+}
 
-  const isStop = event === 'Stop';
-  if (isStop ? !cfg.stopDelivery : !cfg.deliverOn.has(event)) return undefined;
-  if (isStop && payload['stop_hook_active'] === true) return undefined;
-
-  const relay = new RelayClient(cfg, cfg.hookDeadlineMs);
-  if (isStop) {
-    const all = await relay.list({ to: cfg.participant });
-    const stopDeliveries = new Set(
-      all.flatMap((item) =>
-        item.observations
-          .filter((o) => o.type === 'context_supplied' && o.hookEvent === 'Stop' && o.sessionId === sessionId)
-          .map((o) => o.at),
-      ),
-    ).size;
-    if (stopDeliveries >= cfg.stopMaxPerSession) return undefined;
-  }
-
-  const items = await relay.list({ to: cfg.participant, pending: true, notSuppliedTo: sessionId });
-  if (items.length === 0) return undefined;
-
-  const text = formatPendingItems(cfg.participant, items);
-  for (const item of items)
-    await relay.observe(item.id, { type: 'context_supplied', sessionId, hookEvent: event });
-  logEvent(cfg, 'hooks', { event, sessionId, supplied: items.map((i) => `${i.id}@v${i.version}`) });
-
-  return isStop
-    ? { decision: 'block', reason: text }
-    : { hookSpecificOutput: { hookEventName: event, additionalContext: text } };
+function writeStdout(text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(text, (error) => (error ? reject(error) : resolve()));
+  });
 }
 
 async function main(): Promise<void> {
@@ -57,30 +41,46 @@ async function main(): Promise<void> {
     logEvent(cfg, 'errors', { where: 'hook', message: `unknown hook event "${event}"` });
     return;
   }
-  let timer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<'deadline'>((resolve) => {
-    timer = setTimeout(() => resolve('deadline'), cfg.hookDeadlineMs);
-  });
+  const relay = new RelayClient(cfg, cfg.hookDeadlineMs);
+  let delivered = false;
   try {
-    const outcome = await Promise.race([decide(cfg, event), deadline]);
+    const outcome = await withDeadline(decide(cfg, event, relay), cfg.hookDeadlineMs);
     if (outcome === 'deadline') {
       logEvent(cfg, 'errors', {
         where: 'hook',
         event,
-        message: `deadline ${cfg.hookDeadlineMs}ms reached; failing open`,
+        message: `deadline ${cfg.hookDeadlineMs}ms reached; failing open, nothing supplied`,
       });
-    } else if (outcome !== undefined) {
-      process.stdout.write(JSON.stringify(outcome));
+      return;
     }
+    const { sessionId, delivery } = outcome;
+    if (!delivery) return;
+
+    await writeStdout(JSON.stringify(delivery.output));
+    delivered = true;
+    for (const item of delivery.items)
+      await relay.observe(item.id, {
+        type: 'context_supplied',
+        sessionId,
+        hookEvent: event,
+        detail: delivery.deliveryId,
+      });
+    logEvent(cfg, 'hooks', {
+      event,
+      sessionId,
+      deliveryId: delivery.deliveryId,
+      supplied: delivery.items.map((i) => `${i.id}@v${i.version}`),
+    });
   } catch (error) {
     logEvent(cfg, 'errors', {
       where: 'hook',
       event,
+      delivered,
       message: error instanceof Error ? error.message : String(error),
+      ...(delivered ? { note: 'output was written but the context_supplied observation is incomplete' } : {}),
     });
-  } finally {
-    clearTimeout(timer);
   }
 }
 
+// Exit only after stdout has flushed (writeStdout waits for its callback).
 main().finally(() => process.exit(0));

@@ -9,9 +9,18 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, '[REDACTED:github-token]'],
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g, '[REDACTED:jwt]'],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]'],
-  // key=value or "key": "value" for secret-looking keys
+  [/\bBasic\s+[A-Za-z0-9+/=]{8,}/gi, 'Basic [REDACTED]'],
+  [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '[REDACTED:aws-key]'],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, '[REDACTED:slack-token]'],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED:private-key]'],
+  // Credentials embedded in URLs: scheme://user:password@host
+  [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s:@/"\\]+:[^\s@/"\\]+@/gi, '$1[REDACTED]@'],
+  // Cookie headers: the whole value, not just the first pair
+  [/((?:set-)?cookie\s*:\s*)(?!\[REDACTED)[^"\\\r\n]+/gi, '$1[REDACTED]'],
+  // key=value or "key": "value" for secret-looking keys, including prefixed names (DB_PASSWORD,
+  // client_secret) and JSON that has been stringified again (\"token\":\"x\").
   [
-    /("?\b(?:[a-z_]*token|secret|password|passwd|api[_-]?key|authorization)"?\s*[:=]\s*"?)(?!\[REDACTED)[^"\s,}&]+/gi,
+    /((?:\\?")?[A-Za-z0-9_.-]*(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|authorization)(?:\\?")?\s*[:=]\s*(?:\\?")?)(?!\[REDACTED)[^"\\\s,}&]+/gi,
     '$1[REDACTED]',
   ],
   // Emails

@@ -45,7 +45,8 @@ const settings = {
 
 const envFlags = Object.entries(env)
   .filter(([, value]) => value !== '')
-  .map(([key, value]) => `-e ${key}=${value}`)
+  // Quoted so values with spaces (this repo's own path has one) survive the shell.
+  .map(([key, value]) => `-e "${key}=${value}"`)
   .join(' ');
 
 console.log(

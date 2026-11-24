@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests --dir src",
     "relay": "node dist/relay/server.js",
     "settings": "node dist/print-settings.js",
     "redact": "node dist/redact-cli.js"

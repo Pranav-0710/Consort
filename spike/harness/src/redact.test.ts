@@ -56,6 +56,27 @@ describe('redact', () => {
     expect(out).toContain('"tool_name":"Bash"');
   });
 
+  it('catches prefixed names, re-stringified JSON and other common credential shapes', () => {
+    const value = fake('Zq', '9vXw', '2Lp7Rt');
+    const cases: Array<[string, string]> = [
+      [`export SPIKE_TOKEN=\\"${value}\\"`, value],
+      [`{\\"token\\":\\"${value}\\"}`, value],
+      [`client_secret=${value}`, value],
+      [`DB_PASSWORD=${value}`, value],
+      [`AWS_SECRET_ACCESS_KEY=${value}`, value],
+      [`Authorization: Basic ${fake('dXNl', 'cjpwYXNz')}`, fake('dXNl', 'cjpwYXNz')],
+      [`key ${fake('AK', 'IA', 'ABCDEFGHIJKLMNOP')}`, fake('AK', 'IA', 'ABCDEFGHIJKLMNOP')],
+      [`slack ${fake('xo', 'xb-', '1234567890-abcdef')}`, fake('xo', 'xb-', '1234567890-abcdef')],
+      [`Cookie: sid=${value}; theme=dark`, value],
+      [`https://bob:${value}@git.example.org/repo`, value],
+      [
+        [fake('-----BEGIN ', 'PRIVATE KEY-----'), value, fake('-----END ', 'PRIVATE KEY-----')].join('\\n'),
+        value,
+      ],
+    ];
+    for (const [input, secret] of cases) expect(redact(input), input).not.toContain(secret);
+  });
+
   it('is idempotent', () => {
     const once = redact(SAMPLE);
     expect(redact(once)).toBe(once);
