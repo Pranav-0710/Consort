@@ -22,6 +22,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check PR title
         env:
@@ -31,8 +32,8 @@ jobs:
             echo "::error::PR title must be 'type: short description' (types: feat, fix, chore, docs, refactor, test). Got: $TITLE"
             exit 1
           fi
-          if [ "${#TITLE}" -gt 72 ]; then
-            echo "::error::PR title is ${#TITLE} characters; keep it at 72 or fewer (it becomes the squash commit message)."
+          if [ "${#TITLE}" -ge 72 ]; then
+            echo "::error::PR title is ${#TITLE} characters; keep it under 72 (it becomes the squash commit message)."
             exit 1
           fi
 
@@ -48,9 +49,15 @@ jobs:
       - name: Check linked issue
         env:
           BODY: ${{ github.event.pull_request.body }}
+          BRANCH: ${{ github.head_ref }}
         run: |
-          if ! printf '%s' "$BODY" | grep -Eiq '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+'; then
-            echo "::error::PR body must link its issue with 'Closes #<number>'."
+          # The issue number from the branch name (type/<issue#>-slug) must be closed by a line of
+          # its own. HTML comments are removed first, so the template's examples never count.
+          ISSUE="${BRANCH#*/}"
+          ISSUE="${ISSUE%%-*}"
+          CLEAN="$(printf '%s' "$BODY" | perl -0pe 's/<!--.*?-->//gs')"
+          if ! printf '%s\n' "$CLEAN" | grep -Eiq "^[[:space:]]*(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#${ISSUE}([^0-9]|$)"; then
+            echo "::error::PR body must link the branch's issue on its own line: 'Closes #${ISSUE}'."
             exit 1
           fi
 
