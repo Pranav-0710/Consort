@@ -115,6 +115,17 @@ describe('ItemStore recovery', () => {
     const reopened = new ItemStore(file);
     expect(reopened.skippedTornLine).toBe(true);
     expect(reopened.get(kept.id)?.body).toBe('kept');
+
+    // Writes after recovery must land on their own lines and survive the next restart.
+    const after1 = reopened.create({ kind: 'question', from: 'A', to: 'B', body: 'after1' });
+    const after2 = reopened.create({ kind: 'question', from: 'A', to: 'B', body: 'after2' });
+    const again = new ItemStore(file);
+    expect(again.skippedTornLine).toBe(false);
+    expect([kept.id, after1.id, after2.id].map((id) => again.get(id)?.body)).toEqual([
+      'kept',
+      'after1',
+      'after2',
+    ]);
   });
 
   it('refuses to load when a line before the last is corrupt', () => {

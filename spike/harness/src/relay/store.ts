@@ -1,7 +1,17 @@
 // Durable item store for the spike relay. Every change is appended to a JSONL file and
 // fsynced before it is applied, so items and observations survive a relay restart.
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  truncateSync,
+  writeSync,
+} from 'node:fs';
 import path from 'node:path';
 
 export type ItemKind = 'question' | 'answer' | 'update';
@@ -57,9 +67,8 @@ export class ItemStore {
   constructor(private readonly file: string) {
     mkdirSync(path.dirname(file), { recursive: true });
     if (existsSync(file)) {
-      const lines = readFileSync(file, 'utf8')
-        .split('\n')
-        .filter((line) => line.trim());
+      const content = readFileSync(file, 'utf8');
+      const lines = content.split('\n').filter((line) => line.trim());
       lines.forEach((line, index) => {
         try {
           this.apply(JSON.parse(line) as Entry);
@@ -70,6 +79,12 @@ export class ItemStore {
           this.skippedTornLine = true;
         }
       });
+      if (this.skippedTornLine) {
+        // Cut the torn tail off, so the next append starts on a fresh line.
+        truncateSync(file, Buffer.byteLength(content.slice(0, content.lastIndexOf('\n') + 1)));
+      } else if (content.length > 0 && !content.endsWith('\n')) {
+        appendFileSync(file, '\n');
+      }
     }
   }
 

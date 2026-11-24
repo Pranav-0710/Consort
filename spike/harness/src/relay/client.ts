@@ -1,6 +1,11 @@
 // Minimal relay client shared by the hooks and the MCP server.
+import { randomUUID } from 'node:crypto';
+
 import type { HarnessConfig } from '../config.js';
 import type { Item, ItemKind, ListFilter, ObservationType } from './store.js';
+
+/** The relay answered with an error status: the request arrived, so retrying will not help. */
+export class RelayHttpError extends Error {}
 
 export class RelayClient {
   constructor(
@@ -24,7 +29,7 @@ export class RelayClient {
         typeof payload === 'object' && payload !== null && 'error' in payload
           ? String(payload.error)
           : res.statusText;
-      throw new Error(`relay ${method} ${pathAndQuery}: ${res.status} ${message}`);
+      throw new RelayHttpError(`relay ${method} ${pathAndQuery}: ${res.status} ${message}`);
     }
     return payload as T;
   }
@@ -41,14 +46,24 @@ export class RelayClient {
     return this.request<Item>('GET', `/items/${encodeURIComponent(id)}`);
   }
 
-  create(input: {
+  /**
+   * Creates an item. A network failure or timeout is retried once with the same clientId, so the
+   * relay returns the original item instead of creating a duplicate.
+   */
+  async create(input: {
     kind: ItemKind;
     to: string;
     body: string;
     replyTo?: string;
     version?: number;
   }): Promise<Item> {
-    return this.request<Item>('POST', '/items', input);
+    const body = { ...input, clientId: randomUUID() };
+    try {
+      return await this.request<Item>('POST', '/items', body);
+    } catch (error) {
+      if (error instanceof RelayHttpError) throw error;
+      return this.request<Item>('POST', '/items', body);
+    }
   }
 
   observe(

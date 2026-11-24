@@ -68,6 +68,10 @@ describe('redact', () => {
       [`key ${fake('AK', 'IA', 'ABCDEFGHIJKLMNOP')}`, fake('AK', 'IA', 'ABCDEFGHIJKLMNOP')],
       [`slack ${fake('xo', 'xb-', '1234567890-abcdef')}`, fake('xo', 'xb-', '1234567890-abcdef')],
       [`Cookie: sid=${value}; theme=dark`, value],
+      [`{"password":"correct horse ${value}"}`, value],
+      [`{"Authorization":"token ${value}"}`, value],
+      [`{"cookie":"sid=${value}"}`, value],
+      [`{\\\\\\"token\\\\\\":\\\\\\"${value}\\\\\\"}`, value],
       [`https://bob:${value}@git.example.org/repo`, value],
       [
         [fake('-----BEGIN ', 'PRIVATE KEY-----'), value, fake('-----END ', 'PRIVATE KEY-----')].join('\\n'),

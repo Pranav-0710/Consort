@@ -12,7 +12,7 @@ export function formatPendingItems(participant: string, items: readonly Item[]):
     'Acknowledge each item with spike_ack (item_id, version). Answer questions with spike_answer (question_id, body).',
   ];
   for (const item of items) {
-    const reply = item.replyTo ? `, reply to ${item.replyTo}` : '';
+    const reply = item.replyTo ? `, reply to ${JSON.stringify(item.replyTo)}` : '';
     // JSON-encoded so a body containing newlines cannot forge further "- item" lines.
     lines.push(
       `- item ${item.id} (${item.kind} v${item.version} from ${item.from}${reply}): ${JSON.stringify(item.body)}`,

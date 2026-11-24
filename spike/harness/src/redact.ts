@@ -17,6 +17,12 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s:@/"\\]+:[^\s@/"\\]+@/gi, '$1[REDACTED]@'],
   // Cookie headers: the whole value, not just the first pair
   [/((?:set-)?cookie\s*:\s*)(?!\[REDACTED)[^"\\\r\n]+/gi, '$1[REDACTED]'],
+  // Quoted JSON values of secret-looking keys, whole (spaces included), at any escaping depth:
+  // "password":"correct horse", \"Authorization\":\"token x\", {"cookie":"sid=x"}
+  [
+    /((\\*)"[A-Za-z0-9_.-]*(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|authorization|cookie)\2"\s*:\s*\2")(?!\[REDACTED)(?:(?!\2").)+/gi,
+    '$1[REDACTED]',
+  ],
   // key=value or "key": "value" for secret-looking keys, including prefixed names (DB_PASSWORD,
   // client_secret) and JSON that has been stringified again (\"token\":\"x\").
   [
