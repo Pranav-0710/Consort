@@ -102,7 +102,10 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: git diff "$BASE_SHA...$HEAD_SHA" | ./gitleaks stdin --config .gitleaks.toml --redact --verbose --exit-code 1
+        # Added lines only: a PR that removes or edits next to an existing finding must not fail here.
+        # Commit-scoped .gitleaksignore entries cannot match stdin findings; use .gitleaks.toml allowlists.
+        run: |
+          git diff -U0 "$BASE_SHA...$HEAD_SHA" | { grep '^+' || true; } | { grep -v '^+++' || true; }             | ./gitleaks stdin --config .gitleaks.toml --redact --verbose --exit-code 1
 
   doc-links:
     name: doc-links
