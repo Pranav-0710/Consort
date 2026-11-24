@@ -50,6 +50,14 @@ node -e "console.log(require('crypto').randomBytes(24).toString('hex'))" > ~/con
 SPIKE_RELAY_HOST=0.0.0.0 SPIKE_TOKEN_FILE=~/consort-spike-token npm run relay -w @consort/spike-harness
 ```
 
+In PowerShell:
+
+```powershell
+$env:SPIKE_RELAY_HOST = '0.0.0.0'; $env:SPIKE_TOKEN_FILE = "$HOME\consort-spike-token"; npm run relay -w @consort/spike-harness
+```
+
+On loopback the relay accepts only requests whose `Host` is `127.0.0.1`, `localhost` or `[::1]` on its port, and POSTs only with `content-type: application/json`. This blocks web pages from injecting items. Sender names come from the `x-spike-participant` header and aren't authenticated, which is fine between trusting testers but never for the product.
+
 Copy the token file to the other tester over a private channel. Use this only on a network you trust, and stop the relay when the session ends.
 
 **2. Generate your settings.** Each tester does this inside their own scratch checkout. Use your participant name (`A` or `B`) and the delivery options under test:
