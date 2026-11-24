@@ -78,7 +78,7 @@ Two workflows run on every PR, and CI also runs on every push to `main`. These f
 
 **Keep these names stable.** Branch protection matches checks by name. Renaming a job makes the old required check wait forever, or silently stops requiring the new one. Rename a check only in a PR that also updates the ruleset.
 
-**Secret allowlist.** `.gitleaks.toml` extends the default gitleaks rules. Add an allowlist entry only for a confirmed false positive, keep it as narrow as possible (one path or regex), and name the PR that justified it in a comment. A real credential is never allowlisted: rotate it and remove it from the branch's history before merge.
+**Secret allowlist.** `.gitleaks.toml` extends the default gitleaks rules. Add an allowlist entry only for a confirmed false positive, keep it as narrow as possible (one path or regex), and name the PR that justified it in a comment. A real credential is never allowlisted: rotate it and remove it from the branch's history before merge. The net-diff scan checks added lines only, and `.gitleaksignore` entries (which name a commit) cannot match it, so a false positive there needs a `.gitleaks.toml` allowlist entry.
 
 Before pushing, you can run everything except the secret scan locally:
 

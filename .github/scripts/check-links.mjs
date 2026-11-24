@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // [text](target), [text](<target>), with an optional "title", 'title' or (title).
 const INLINE = /\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-// Reference definitions: [label]: target
-const REFERENCE = /^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)/;
+// Reference definitions: [label]: target. Footnotes ([^1]: text) are not links.
+const REFERENCE = /^ {0,3}\[(?!\^)[^\]]+\]:\s*(<[^>]*>|\S+)/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const CLOSING_FENCE = /^ {0,3}(`{3,}|~{3,})\s*$/;
 
