@@ -1,0 +1,121 @@
+# Checks every PR and every push to main.
+# The job names below are required status checks on main. Renaming one silently
+# disables that protection, so change them only together with the ruleset
+# (docs/CONTRIBUTING.md, "Checks on every PR").
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Cancel superseded PR runs only. Every push to main keeps its own run, secret scan included.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify-linux:
+    name: verify-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  # Hooks, paths and git worktree behave differently on the team's Windows machines,
+  # so the workspaces that touch them are also checked on Windows.
+  verify-windows:
+    name: verify-windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Typecheck Windows-sensitive workspaces
+        run: npx tsc -b packages/adapter-claude tools/check-runner spike/harness
+      - name: Test Windows-sensitive workspaces
+        run: npm test --workspace @consort/adapter-claude --workspace @consort/check-runner --workspace @consort/spike-harness
+      - name: Boundary tests (path handling on Windows)
+        run: npx vitest run
+
+  # Fails the build on committed credentials. Config and allowlist policy: .gitleaks.toml.
+  # Uses the gitleaks CLI, pinned and checksum-verified, rather than gitleaks-action: the action
+  # scans only a PR's first 30 commits and skips merge commits.
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        env:
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          rm gitleaks.tar.gz
+      - name: Scan every commit in the range
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            RANGE="$BASE_SHA..$HEAD_SHA"
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
+            RANGE="$AFTER"
+          else
+            RANGE="$BEFORE..$AFTER"
+          fi
+          echo "Scanning $RANGE"
+          ./gitleaks git --config .gitleaks.toml --log-opts="$RANGE" --redact --verbose --exit-code 1
+      - name: Scan the PR's net change, including merge resolutions
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Added lines only: a PR that removes or edits next to an existing finding must not fail here.
+        # Commit-scoped .gitleaksignore entries cannot match stdin findings; use .gitleaks.toml allowlists.
+        run: |
+          git diff -U0 "$BASE_SHA...$HEAD_SHA" | { grep '^+' || true; } | { grep -v '^+++' || true; }             | ./gitleaks stdin --config .gitleaks.toml --redact --verbose --exit-code 1
+
+  doc-links:
+    name: doc-links
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: node .github/scripts/check-links.mjs
