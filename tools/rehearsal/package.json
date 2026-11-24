@@ -1,0 +1,21 @@
+{
+  "name": "@consort/rehearsal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Two-session end-to-end rehearsal harness for the full collaboration loop and its failure paths.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@consort/protocol": "0.0.0",
+    "@consort/client": "0.0.0"
+  }
+}

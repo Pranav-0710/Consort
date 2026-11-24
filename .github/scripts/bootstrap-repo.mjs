@@ -38,17 +38,26 @@ const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const repoIdx = args.indexOf('--repo');
 const gh = (...a) => execFileSync('gh', a, { encoding: 'utf8' }).trim();
-const repo = repoIdx >= 0 ? args[repoIdx + 1] : gh('repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner');
+const repo =
+  repoIdx >= 0 ? args[repoIdx + 1] : gh('repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner');
 
-const haveLabels = new Set(JSON.parse(gh('label', 'list', '-R', repo, '--limit', '500', '--json', 'name')).map((l) => l.name));
-const haveMilestones = new Set(JSON.parse(gh('api', `repos/${repo}/milestones?state=all&per_page=100`)).map((m) => m.title));
+const haveLabels = new Set(
+  JSON.parse(gh('label', 'list', '-R', repo, '--limit', '500', '--json', 'name')).map((l) => l.name),
+);
+const haveMilestones = new Set(
+  JSON.parse(gh('api', `repos/${repo}/milestones?state=all&per_page=100`)).map((m) => m.title),
+);
 
 const missingLabels = Object.keys(LABELS).filter((n) => !haveLabels.has(n));
 const missingMilestones = MILESTONES.filter((t) => !haveMilestones.has(t));
 
 console.log(`Repository: ${repo}${apply ? '' : '  (dry run; pass --apply to create)'}`);
-console.log(`Labels: ${Object.keys(LABELS).length - missingLabels.length} present, ${missingLabels.length} missing${missingLabels.length ? ': ' + missingLabels.join(', ') : ''}`);
-console.log(`Milestones: ${MILESTONES.length - missingMilestones.length} present, ${missingMilestones.length} missing${missingMilestones.length ? ': ' + missingMilestones.join(' | ') : ''}`);
+console.log(
+  `Labels: ${Object.keys(LABELS).length - missingLabels.length} present, ${missingLabels.length} missing${missingLabels.length ? ': ' + missingLabels.join(', ') : ''}`,
+);
+console.log(
+  `Milestones: ${MILESTONES.length - missingMilestones.length} present, ${missingMilestones.length} missing${missingMilestones.length ? ': ' + missingMilestones.join(' | ') : ''}`,
+);
 
 if (!apply) process.exit(0);
 

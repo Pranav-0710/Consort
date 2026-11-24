@@ -1,0 +1,21 @@
+{
+  "name": "@consort/check-runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Assembles a combined candidate in a temporary worktree from a baseline plus selected SHAs, runs the agreed checks, and submits participant-collected evidence.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@consort/protocol": "0.0.0",
+    "@consort/client": "0.0.0"
+  }
+}

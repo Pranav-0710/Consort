@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+coverage/
+
+# Cloudflare local state
+.wrangler/
+.dev.vars
+
+# Local adapter state (durable inbox/outbox, cursors, pairing credentials)
+.consort/
+
+# Environment and secrets: only the example file is committed
+.env*
+!.env.example
+
+# Spike raw captures stay local; summaries go to docs/capability/
+spike/**/raw/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.log

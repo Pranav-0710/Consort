@@ -1,0 +1,9 @@
+# Generated output and lockfiles
+**/dist/
+**/coverage/
+**/.wrangler/
+package-lock.json
+
+# Markdown is hand-written prose with aligned tables. The imported planning documents
+# must stay unchanged (docs/planning/README.md), so Prettier formats code and config only.
+**/*.md

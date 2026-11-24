@@ -1,0 +1,17 @@
+{
+  "name": "@consort/spike-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Throwaway capability-spike harness for real-client tests.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  }
+}
