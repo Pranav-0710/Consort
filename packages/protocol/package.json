@@ -12,6 +12,9 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run --passWithNoTests"
+    "test": "tsc -p test && vitest run --dir test"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
   }
 }
