@@ -1,0 +1,8 @@
+# Gitleaks finding fingerprints that are confirmed false positives (see .gitleaks.toml for the policy).
+# Format: <commit>:<file>:<rule>:<line>. Each entry ignores exactly one finding in one commit.
+#
+# PR #84: synthetic token samples in the redaction test's first commit. They are not credentials.
+# The next commit builds the samples from fragments at runtime, so the file no longer contains
+# token-shaped literals and these fingerprints match nothing in later commits.
+1612000bcc867455fc73c0ceaf37c841712a48f0:spike/harness/src/redact.test.ts:jwt:13
+1612000bcc867455fc73c0ceaf37c841712a48f0:spike/harness/src/redact.test.ts:github-pat:10

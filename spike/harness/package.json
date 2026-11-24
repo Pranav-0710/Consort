@@ -12,6 +12,13 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests --dir src",
+    "relay": "node dist/relay/server.js",
+    "settings": "node dist/print-settings.js",
+    "redact": "node dist/redact-cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
   }
 }
