@@ -86,7 +86,7 @@ export const CATALOGUE: { readonly [T in CommandType]: CatalogueEntry } = {
     principals: HUMAN,
     minRole: 'contributor',
     ownership: 'package_owner',
-    requiredVersions: AUTHORITY,
+    requiredVersions: [...AUTHORITY, 'contract_versions'],
   },
   'ownership.transfer': {
     principals: HUMAN,
@@ -210,8 +210,9 @@ export const CATALOGUE: { readonly [T in CommandType]: CatalogueEntry } = {
     requiredVersions: ['record_version'],
     placeholderFor: '#49',
   },
+  // COLLABORATION_PROTOCOL §3: an authorized consumer or collector records retrieval.
   'handoff.record_retrieval': {
-    principals: AGENT,
+    principals: ['human', 'agent_run', 'evidence_collector'],
     minRole: 'contributor',
     ownership: 'consumer',
     requiredVersions: [],
@@ -247,6 +248,10 @@ export const CATALOGUE: { readonly [T in CommandType]: CatalogueEntry } = {
     requiredVersions: [],
     placeholderFor: '#56',
   },
+  // Deliberately narrower than "reviewer or trusted collector" (ROOM_AGENT_CONTRACT §3): a
+  // collector's result arrives through evidence.submit_collected, and per the glossary a
+  // criterion counts as satisfied only when its human owner accepts the evidence. #54 decides
+  // whether a later independent collector may establish it directly.
   'evidence.accept': {
     principals: HUMAN,
     minRole: 'contributor',
