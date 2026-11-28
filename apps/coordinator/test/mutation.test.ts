@@ -16,6 +16,7 @@ import {
   featureHandler,
   member,
   requestId,
+  RUN,
   seedRecord,
   setup,
 } from './support/harness.js';
@@ -94,7 +95,7 @@ describe('the transactional mutation path', () => {
     ).toEqual({ n: 1 });
   });
 
-  it('a handler throwing after partial writes leaves no row, event, receipt or outbox entry', () => {
+  it('a handler throwing after partial writes leaves no row, event, receipt or outbox entry, and says nothing changed', () => {
     const throwing = defineHandler({
       type: 'feature.create',
       apply: (ctx) => {
@@ -104,11 +105,13 @@ describe('the transactional mutation path', () => {
         throw new Error('handler bug');
       },
     });
-    const { core, storage, epoch } = setup({ handlers: [throwing] });
+    const { core, storage, epoch, errors } = setup({ handlers: [throwing] });
     const before = snapshot(storage.db);
-    expect(() => core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toThrow(
-      'handler bug',
-    );
+    expect(core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toMatchObject({
+      ok: false,
+      error: { code: 'internal_error' },
+    });
+    expect(errors).toEqual([expect.stringContaining('handler bug')]);
     expect(snapshot(storage.db)).toEqual(before);
     expect(storage.db.prepare('SELECT created_by FROM meta').get()).not.toEqual({ created_by: 'tampered' });
   });
@@ -138,9 +141,13 @@ describe('the transactional mutation path', () => {
         ctx.emit({ type: 'feature.created', record: { type: 'feature', id: feature.id, version: 7 } });
       },
     });
-    const { core, storage, epoch } = setup({ handlers: [lying] });
+    const { core, storage, epoch, errors } = setup({ handlers: [lying] });
     const before = snapshot(storage.db);
-    expect(() => core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toThrow();
+    expect(core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toMatchObject({
+      ok: false,
+      error: { code: 'internal_error' },
+    });
+    expect(errors).toEqual([expect.stringContaining('does not match record')]);
     expect(snapshot(storage.db)).toEqual(before);
   });
 
@@ -163,7 +170,7 @@ describe('the transactional mutation path', () => {
     );
     expect(core.applyCommand(alice, foreignOwner)).toMatchObject({
       ok: false,
-      error: { code: 'unknown_reference', field: 'payload' },
+      error: { code: 'unknown_reference', field: 'payload.owner_id' },
     });
     expect(applied).toBe(0);
     // The command's target.
@@ -288,12 +295,15 @@ describe('the transactional mutation path', () => {
     const scoped = defineHandler({ ...answerHandler, scope: () => [PACKAGE] });
     const { core, storage, authority, epoch } = setup({ handlers: [scoped, featureHandler] });
     seedRecord(storage, 'question', QUESTION);
-    authority.set(aliceAgent, member('contributor', []));
+    authority.set(
+      aliceAgent,
+      member('contributor', { scope: [formatId('package', 'otherPackage1')], run_id: RUN }),
+    );
     expect(core.applyCommand(aliceAgent, answer(epoch, 1, { agent: true }))).toMatchObject({
       ok: false,
       error: { code: 'not_authorized' },
     });
-    authority.set(aliceAgent, member('contributor', [PACKAGE]));
+    authority.set(aliceAgent, member('contributor', { scope: [PACKAGE], run_id: RUN }));
     expect(core.applyCommand(aliceAgent, answer(epoch, 1, { agent: true }))).toMatchObject({ ok: true });
     const actor = storage.db
       .prepare("SELECT actor, source FROM events WHERE type = 'question.answered'")
@@ -333,11 +343,13 @@ describe('handlers are synchronous and import no network API', () => {
           }
         })) as unknown as typeof featureHandler.apply,
     });
-    const { core, storage, epoch } = setup({ handlers: [asyncHandler] });
+    const { core, storage, epoch, errors } = setup({ handlers: [asyncHandler] });
     const before = snapshot(storage.db);
-    expect(() => core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toThrow(
-      'handlers must be synchronous',
-    );
+    expect(core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toMatchObject({
+      ok: false,
+      error: { code: 'internal_error' },
+    });
+    expect(errors).toEqual([expect.stringContaining('handlers must be synchronous')]);
     await Promise.resolve();
     await Promise.resolve();
     expect(escaped).toBeInstanceOf(Error);

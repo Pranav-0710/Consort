@@ -32,6 +32,11 @@ export class ProjectCoordinator extends DurableObject {
 
   /** Creates the project. Called only by the project-creation route (#20). */
   init(input: InitInput): InitResult {
+    // The Worker addresses each project's object by its ID, so the two must agree: a project
+    // can never be created inside another project's object.
+    const name = this.ctx.id.name;
+    if (name !== undefined && name !== input.project_id)
+      throw new TypeError('init: wrong object for project');
     return this.#core.init(input);
   }
 

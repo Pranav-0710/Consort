@@ -54,6 +54,11 @@ export interface CoordinatorOptions {
    * row already holds the intent, so a failure here loses nothing (stress C03).
    */
   readonly broadcast?: (events: readonly EventRecord[]) => void;
+  /**
+   * Receives a failure that was rolled back and answered with internal_error. Defaults to
+   * logging the error's name only, since messages can carry command content.
+   */
+  readonly reportError?: (error: unknown) => void;
 }
 
 export class CoordinatorCore {
@@ -95,7 +100,18 @@ export class CoordinatorCore {
     const now = this.#now();
     const created = this.#storage.transactionSync(() => {
       const sql = this.#storage.sql;
-      if (loadMeta(sql) !== undefined) return undefined;
+      const existing = loadMeta(sql);
+      if (existing !== undefined) {
+        // A retry of the creating request learns the original result; anything else is refused.
+        const retried = sql
+          .exec<{ n: number }>(
+            "SELECT count(*) AS n FROM command_receipts WHERE principal_key = ? AND request_id = ? AND command_type = 'project.init'",
+            principalKey({ kind: 'human', user_id: input.created_by }),
+            input.request_id,
+          )
+          .one().n;
+        return existing.project_id === input.project_id && retried > 0 ? { meta: existing } : undefined;
+      }
       const meta = { project_id: input.project_id, recovery_epoch: newId('recovery_epoch') };
       sql.exec(
         'INSERT INTO meta (id, project_id, recovery_epoch, created_by, created_at) VALUES (1, ?, ?, ?, ?)',
@@ -131,16 +147,17 @@ export class CoordinatorCore {
       return { meta, event };
     });
     if (created === undefined) return { ok: false, reason: 'exists' };
-    this.#afterCommit([created.event]);
-    return { ok: true, ...created.meta };
+    if ('event' in created) this.#afterCommit([created.event]);
+    return { ok: true, project_id: created.meta.project_id, recovery_epoch: created.meta.recovery_epoch };
   }
 
   /**
    * Validates the command again (the Worker already did), then runs the mutation path in one
-   * transaction. Responds and broadcasts only after that transaction has committed.
+   * transaction. Responds and broadcasts only after that transaction has committed. Never
+   * throws: a refusal or a rolled-back failure comes back as a result.
    */
   applyCommand(principal: unknown, commandText: string): ApplyResult {
-    if (!isPrincipal(principal)) throw new TypeError('applyCommand: malformed principal');
+    if (!isPrincipal(principal)) return this.#internalError(new TypeError('malformed principal'));
     if (this.#state.status === 'failed') return refuse('project_unavailable');
     if (this.#state.status === 'empty') return refuse('project_not_found');
 
@@ -149,14 +166,24 @@ export class CoordinatorCore {
 
     const now = this.#now();
     const acting: Principal = principal;
+    // The refusal is recorded before it leaves the callback, so recognising it does not depend
+    // on transactionSync rethrowing the very same exception object.
+    let refused: ProtocolError | undefined;
     let committed;
     try {
-      committed = this.#storage.transactionSync(() =>
-        runMutation(this.#storage.sql, this.#options.registry, acting, validated.command, now),
-      );
+      committed = this.#storage.transactionSync(() => {
+        try {
+          return runMutation(this.#storage.sql, this.#options.registry, acting, validated.command, now);
+        } catch (error) {
+          if (error instanceof Rejection) refused = error.error;
+          throw error;
+        }
+      });
     } catch (error) {
-      if (error instanceof Rejection) return { ok: false, error: error.error };
-      throw error;
+      if (refused !== undefined) return { ok: false, error: refused };
+      // A bug, not a refusal. The transaction rolled back, so the outcome is known: nothing
+      // changed. outcome_unknown is kept for a failed call to this object, where it is not.
+      return this.#internalError(error);
     }
     this.#afterCommit(committed.events);
     return {
@@ -176,12 +203,21 @@ export class CoordinatorCore {
     return (this.#options.now?.() ?? new Date()).toISOString();
   }
 
+  #internalError(error: unknown): ApplyResult {
+    const report =
+      this.#options.reportError ??
+      ((e: unknown) => console.error('command rolled back', e instanceof Error ? e.name : 'unknown'));
+    report(error);
+    return { ok: false, error: protocolError('internal_error') };
+  }
+
   #afterCommit(events: readonly EventRecord[]): void {
     if (events.length === 0 || this.#options.broadcast === undefined) return;
     try {
       this.#options.broadcast(events);
-    } catch {
+    } catch (error) {
       // The outbox row is the durable intent; delivery is retried from it, never from here.
+      console.error('broadcast after commit failed', error instanceof Error ? error.name : 'unknown');
     }
   }
 }

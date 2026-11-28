@@ -71,6 +71,7 @@ const STATUS: Partial<Record<ErrorCode, number>> = {
   connection_fenced: 409,
   command_window_invalid: 409,
   command_unavailable: 501,
+  internal_error: 500,
 };
 
 function errorResponse(error: ProtocolError): Response {

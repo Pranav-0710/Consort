@@ -7,7 +7,7 @@ import { createRegistry, DENY_ALL, defineHandler } from '../src/mutations/regist
 import { CoordinatorCore } from '../src/do/core.js';
 import { validateAtIngress } from '../src/worker/validate.js';
 
-import { alice, aliceAgent, commandText, member, PROJECT, setup } from './support/harness.js';
+import { alice, aliceAgent, commandText, member, PROJECT, RUN, setup } from './support/harness.js';
 import { memoryStorage } from './support/sqlite.js';
 
 const humanOnly = COMMAND_TYPES.filter((type) => !CATALOGUE[type].principals.includes('agent_run'));
@@ -21,7 +21,7 @@ describe('catalogue enforcement', () => {
 
   // The issue's forbidden_for_agent and forbidden_for_human are the protocol's principal_not_allowed.
   it.each(humanOnly)('every human-only command fails for an agent principal: %s', (type) => {
-    const fixture = setup({ members: [[aliceAgent, member('admin', [])]] });
+    const fixture = setup({ members: [[aliceAgent, member('admin', { scope: 'project', run_id: RUN })]] });
     const text = commandText(type, {}, { epoch: fixture.epoch, agent: true });
     expect(validateAtIngress(text, aliceAgent, PROJECT)).toMatchObject({
       ok: false,

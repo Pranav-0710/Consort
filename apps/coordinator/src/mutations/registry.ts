@@ -29,10 +29,17 @@ export interface Authority {
   readonly role: Role;
   readonly membership_policy_version: number;
   /**
-   * Packages an agent or collector credential may act on. People have no package scope: their
+   * What an agent or collector credential may act on: named packages, or `'project'` for a
+   * credential explicitly scoped to the whole project. People have no package scope: their
    * membership covers the project, and ownership is checked per command.
    */
-  readonly scope?: ReadonlySet<string>;
+  readonly scope?: ReadonlySet<string> | 'project';
+  /**
+   * For an agent run: the run this credential and connection are bound to, as the authority
+   * port verified it (#24). The command's identity block must name this run, or nothing is
+   * written. Undefined for people and collectors.
+   */
+  readonly run_id?: string;
 }
 
 export type AuthorityResult =
@@ -80,7 +87,7 @@ export interface MutationContext<T extends CommandType> extends CheckInput<T> {
   createRecord(type: RecordType, kind: IdKind): { readonly id: string; readonly version: 1 };
   /** Raises a record's version by one and returns the new version. */
   bumpRecord(id: string): number;
-  /** Queues an event; it is written with its outbox row when the handler returns. */
+  /** Writes an event and its outbox row now. It must describe the record's current version. */
   emit(event: EmittedEvent): void;
   /** Refuses the command. Everything the handler wrote is rolled back. */
   reject(code: ErrorCode, field?: string): never;
@@ -96,12 +103,13 @@ export interface HandlerDefinition<T extends CommandType> {
   target?(payload: CommandPayload<T>): string;
   /**
    * Packages the command acts on, checked against an agent's or collector's credential scope
-   * (step 3). Required for any command a non-human principal may send.
+   * (step 3). Required for any command a non-human principal may send. An empty list is
+   * refused; a command that acts on the whole project returns `'project'`.
    */
-  scope?(input: CheckInput<T>): readonly string[];
+  scope?(input: CheckInput<T>): readonly string[] | 'project';
   /**
-   * IDs the command refers to, each of which must exist in this project (step 4). Defaults to
-   * every ID-shaped string in the payload.
+   * Further IDs the command refers to, each of which must exist in this project (step 4). They
+   * are added to the references found in the payload by field name, never instead of them.
    */
   references?(payload: CommandPayload<T>): readonly string[];
   /** The ownership rule from the catalogue. Required unless that rule is `none`. */
@@ -126,7 +134,8 @@ export interface MutationRegistry {
 
 /**
  * Builds a registry, refusing handler sets that would skip a catalogue rule: a command with an
- * ownership rule needs `authorize`, and one a non-human principal may send needs `scope`.
+ * ownership rule needs `authorize`, one a non-human principal may send needs `scope`, and a
+ * required expected version needs the declaration that lets it be checked.
  */
 export function createRegistry(options: {
   readonly authority: AuthorityPort;
@@ -141,6 +150,14 @@ export function createRegistry(options: {
     }
     if (entry.principals.some((kind) => kind !== 'human') && handler.scope === undefined) {
       throw new Error(`${handler.type} accepts non-human principals but declares no scope`);
+    }
+    for (const key of entry.requiredVersions) {
+      const missing =
+        key === 'record_version'
+          ? handler.target === undefined
+          : (key === 'owner_version' || key === 'agreement_version' || key === 'plan_version') &&
+            handler.versions === undefined;
+      if (missing) throw new Error(`${handler.type} requires ${key} but cannot check it`);
     }
     handlers.set(handler.type, handler as unknown as HandlerDefinition<CommandType>);
   }

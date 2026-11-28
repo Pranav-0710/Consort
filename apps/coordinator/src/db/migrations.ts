@@ -5,7 +5,10 @@
 // coordinator refuses every request while any migration is pending or failed, and also when
 // storage was written by a newer build than this one (a downgrade): it never serves a schema it
 // does not understand. Each later issue appends its own numbered migration; released migrations
-// are never edited.
+// are never edited, renamed or reordered.
+//
+// A failed state lasts for the life of the object instance: a transient failure keeps the project
+// unavailable until the object restarts, which then retries the pending migration.
 import { first, tableExists, type SqlPort, type StoragePort } from './sql.js';
 
 export interface Migration {
@@ -113,7 +116,10 @@ export function applyMigrations(
   migrations: readonly Migration[] = MIGRATIONS,
   now: () => string = () => new Date().toISOString(),
 ): MigrationState {
-  const known = migrations.at(-1)?.version ?? 0;
+  const problem = checkList(migrations);
+  if (problem !== undefined)
+    return { status: 'failed', version: schemaVersion(storage.sql), reason: problem };
+  const known = migrations.length;
   let version = schemaVersion(storage.sql);
   if (version > known) {
     return {
@@ -121,6 +127,21 @@ export function applyMigrations(
       version,
       reason: `storage is at schema ${version}, this build knows ${known}`,
     };
+  }
+  // A released migration that was renamed or reordered means this build and the stored schema
+  // disagree about history: refuse rather than guess.
+  if (version > 0) {
+    const stored = storage.sql
+      .exec<{ version: number; name: string }>('SELECT version, name FROM schema_migrations ORDER BY version')
+      .toArray();
+    const mismatch = stored.find((row) => migrations[row.version - 1]?.name !== row.name);
+    if (mismatch !== undefined) {
+      return {
+        status: 'failed',
+        version,
+        reason: `stored migration ${mismatch.version} does not match this build`,
+      };
+    }
   }
   const applied: number[] = [];
   for (const migration of migrations) {
@@ -153,6 +174,19 @@ export function applyMigrations(
     applied.push(migration.version);
   }
   return { status: 'ready', version, applied };
+}
+
+/** Versions must run 1, 2, 3 … in order, and each statement must be a single statement. */
+function checkList(migrations: readonly Migration[]): string | undefined {
+  for (const [index, migration] of migrations.entries()) {
+    if (migration.version !== index + 1) return `migration list is not numbered 1..n at ${migration.name}`;
+    // The Durable Object API would run every statement in a ';'-joined batch; one per entry
+    // keeps each one visible and keeps local tests and production behaving the same.
+    if (migration.statements.some((statement) => statement.includes(';'))) {
+      return `migration ${migration.version} joins statements with ';'`;
+    }
+  }
+  return undefined;
 }
 
 function describe(error: unknown): string {

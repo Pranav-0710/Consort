@@ -1,7 +1,8 @@
 // A StoragePort over Node's built-in SQLite, with the Durable Object semantics the coordinator
 // relies on: one statement per exec, positional bindings, and transactionSync that rolls back
 // every write when its callback throws. Like the Durable Object API, it refuses transaction
-// statements from callers, so code cannot work here and fail in workerd for that reason.
+// statements from callers, and it refuses nested transactionSync, which that API does not
+// document, so code cannot work here and fail in workerd for those reasons.
 // This is not workerd: behaviour specific to the Cloudflare runtime is not covered.
 import { DatabaseSync } from 'node:sqlite';
 
@@ -44,6 +45,8 @@ export function memoryStorage(db = new DatabaseSync(':memory:')): TestStorage {
       return depth > 0;
     },
     transactionSync<T>(fn: () => T): T {
+      // Nesting is not documented for the Durable Object API, so code must not rely on it.
+      if (depth > 0) throw new Error('nested transactionSync is not supported');
       const name = `tx${depth}`;
       db.exec(`SAVEPOINT ${name}`);
       depth += 1;

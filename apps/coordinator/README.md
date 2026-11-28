@@ -19,16 +19,28 @@ Cloudflare Worker ingress plus one SQLite-backed Durable Object per project: aut
 
 ## The mutation path
 
-Every command runs through `runMutation` inside one `transactionSync`, in this order: the project and recovery epoch; current membership or credential status; the catalogue (principal kind, minimum role, a registered handler); credential scope; every referenced ID resolving inside this project, then the ownership rule; every expected version, including authority versions; the handler; and finally the event, outbox and receipt rows. A refusal or throw at any step rolls everything back. The response and any broadcast happen only after commit.
+Every command runs through `runMutation` inside one `transactionSync`, in this order:
+
+1. This object holds the project the command names.
+2. Current membership or credential status, loaded inside the transaction. For an agent, the identity block must name the credential's connection and the run the authority port verified; then the recovery epoch.
+3. The catalogue: principal kind, minimum role, a registered handler.
+4. Credential scope for agents and collectors (an empty list is refused; project-wide commands say `'project'`), then that the request ID is unused.
+5. Every reference resolves inside this project as the right kind of record, then the ownership rule.
+6. Every expected version, including authority versions. A key the coordinator cannot check is refused, never skipped.
+7. The handler. Each event and its outbox row is written as it is emitted, then the receipt.
+
+References are found by field name: `*_id` and `reply_to` hold one ID, `*_ids` a list, and the keys of a `*_versions` map are IDs. A test checks every command payload schema follows this. Free text is never read as a reference.
+
+A refusal or throw at any step rolls everything back. A refusal comes back as its error code; a bug comes back as `internal_error` ("nothing was changed"), because the rollback makes the outcome known. `outcome_unknown` is used only when the call to the object itself fails. The response and any broadcast happen only after commit.
 
 Handlers are synchronous. The SQL handle a handler receives stops working when the transaction ends, and a test rejects network, timer and promise APIs in `src/mutations/` and `src/commands/`.
 
-A fresh object has no tables and writes nothing until `init` creates the project. If a migration fails, or storage was written by a newer build, every request gets `project_unavailable`.
+A fresh object has no tables and writes nothing until `init` creates the project; retrying `init` with the same request returns the original result. If a migration fails, the migration list is out of order or renamed, or storage was written by a newer build, every request gets `project_unavailable` until the object restarts.
 
 ## Adding to it
 
 - Add a numbered migration to the end of `MIGRATIONS`. Never edit a released one.
-- Register handlers in `src/mutations/production.ts`. `createRegistry` refuses a handler for a command with an ownership rule but no `authorize`, or one that non-human principals may send but that declares no `scope`.
+- Register handlers in `src/mutations/production.ts`. `createRegistry` refuses a handler for a command with an ownership rule but no `authorize`, one that non-human principals may send but that declares no `scope`, and one that cannot check a version its command requires.
 
 ## Tests
 

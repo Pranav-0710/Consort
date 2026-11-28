@@ -23,6 +23,7 @@ export const ERROR_MESSAGES = {
   project_unavailable:
     'The project is temporarily unavailable. Nothing was changed. Try again later, then reconcile.',
   command_unavailable: 'The coordinator does not accept this command yet. Nothing was changed.',
+  internal_error: 'The coordinator hit an internal error. Nothing was changed.',
   unknown_reference: 'The command refers to a record that does not exist in this project.',
   not_a_member: 'You are not a current member of this project.',
   not_authorized: 'Your current role or ownership does not allow this command.',

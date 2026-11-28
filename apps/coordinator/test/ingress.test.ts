@@ -121,6 +121,26 @@ describe('Worker ingress', () => {
     expect(received).toHaveLength(0);
   });
 
+  it('a rolled-back internal failure is reported as 500 internal_error, not outcome_unknown', async () => {
+    const { fixture } = worker(alice);
+    const deps: RouterDeps = {
+      authenticate: () => Promise.resolve(alice),
+      coordinatorFor: () => ({
+        applyCommand: (): Promise<ApplyResult> =>
+          Promise.resolve({ ok: false, error: { code: 'internal_error', message: 'nothing changed' } }),
+      }),
+    };
+    const response = await handleRequest(
+      new Request(URL_FOR(PROJECT), {
+        method: 'POST',
+        body: commandText('feature.create', FEATURE, { epoch: fixture.epoch }),
+      }),
+      deps,
+    );
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: { code: 'internal_error' } });
+  });
+
   it('a failed call to the object is reported as outcome_unknown, never as success or failure', async () => {
     const { fixture } = worker(alice);
     const deps: RouterDeps = {

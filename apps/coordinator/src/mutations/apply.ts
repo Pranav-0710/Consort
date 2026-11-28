@@ -1,16 +1,17 @@
 // The single path every mutation follows (rule H01, invariant 4, issue #10).
 //
 // `runMutation` must be called inside `transactionSync`. It checks, in order:
-//   0. the project exists, the command names it, and its recovery epoch is current
-//   1. current membership or credential status (and that the request ID is unused)
+//   0. this object holds the project the command names
+//   1. current membership or credential status, the agent's connection and run binding, and
+//      then the recovery epoch (after membership, so a non-member learns nothing about it)
 //   2. the catalogue: principal kind, minimum role, and a registered handler
-//   3. credential scope, for agents and collectors
-//   4. every referenced ID resolves inside this project; then the ownership rule, which needs
-//      resolved references
+//   3. credential scope, for agents and collectors; then that the request ID is unused
+//   4. every referenced ID resolves inside this project, as the right kind of record; then the
+//      ownership rule, which needs resolved references
 //   5. every expected version, including the authority versions
-// then runs the handler and writes the canonical rows, receipt, events and outbox rows. Any
-// refusal or throw rolls the whole transaction back, so nothing partial is ever visible. The
-// caller responds and broadcasts only after the transaction has committed.
+// then runs the handler, writing each event and its outbox row as the handler emits it, and
+// finally the receipt. Any refusal or throw rolls the whole transaction back, so nothing
+// partial is ever visible. The caller responds and broadcasts only after commit.
 import {
   CATALOGUE,
   EventRecordSchema,
@@ -24,6 +25,7 @@ import {
   type ExpectedVersionKey,
   type IdKind,
   type ProtocolError,
+  type RecordType,
   type ValidatedCommand,
 } from '@consort/protocol';
 
@@ -34,7 +36,6 @@ import { actorFor, principalKey, sourceFor, type Principal } from './principal.j
 import type {
   Authority,
   CheckInput,
-  EmittedEvent,
   HandlerDefinition,
   MutationContext,
   MutationRegistry,
@@ -61,6 +62,36 @@ export interface ProjectMeta {
 
 /** ID kinds that name protocol machinery rather than project records. */
 const NOT_RECORDS: ReadonlySet<IdKind> = new Set(['request', 'command_window', 'recovery_epoch']);
+
+/** The record type an ID of each kind must name. Kinds not listed only need to exist. */
+export const RECORD_TYPE_OF_KIND: Partial<Record<IdKind, RecordType>> = {
+  project: 'project',
+  user: 'member',
+  feature: 'feature',
+  package: 'package',
+  contract: 'contract',
+  change_request: 'change_request',
+  question: 'question',
+  message: 'message',
+  run: 'run',
+  handoff: 'handoff',
+  evidence: 'evidence',
+};
+
+/**
+ * Payload fields that hold references, by name: `*_id` (and `reply_to`) hold one ID, `*_ids`
+ * hold a list, and the keys of a `*_versions` map are IDs. A test checks every command payload
+ * schema follows this, so free text that happens to look like an ID is never read as one.
+ */
+const SINGLE_REFERENCE = /(_id|^reply_to)$/;
+const LIST_REFERENCE = /_ids$/;
+const KEYED_REFERENCE = /_versions$/;
+/** Fields named like references that hold stable keys (letters, digits, `._-`), not record IDs. */
+export const STABLE_KEY_FIELDS: ReadonlySet<string> = new Set([
+  'criterion_id',
+  'requirement_ids',
+  'step_ids',
+]);
 
 export function loadMeta(sql: SqlPort): ProjectMeta | undefined {
   return first(
@@ -105,23 +136,13 @@ function run(
   // 0. The project. A command for an ID this object does not hold reveals nothing about it.
   const meta = loadMeta(sql);
   if (meta === undefined || meta.project_id !== envelope.project_id) reject('project_not_found');
-  if (meta.recovery_epoch !== envelope.recovery_epoch) reject('recovery_epoch_mismatch', 'recovery_epoch');
 
   // 1. Current standing, loaded now rather than trusted from the session.
   const standing = registry.authority.resolve(sql, principal, command);
   if (!standing.ok) throw new Rejection(standing.error);
   const authority = standing.authority;
-
-  const key = principalKey(principal);
-  const used = first(
-    sql.exec<{ n: number }>(
-      'SELECT count(*) AS n FROM command_receipts WHERE principal_key = ? AND request_id = ?',
-      key,
-      envelope.request_id,
-    ),
-  );
-  // Returning the retained outcome of an identical retry is #11; until then any reuse is refused.
-  if ((used?.n ?? 0) > 0) reject('request_id_conflict', 'request_id');
+  const runId = checkIdentity(principal, envelope as Partial<AgentEnvelope>, authority);
+  if (meta.recovery_epoch !== envelope.recovery_epoch) reject('recovery_epoch_mismatch', 'recovery_epoch');
 
   // 2. The catalogue. validateCommand already checked the principal kind; this is the second
   //    check the issue requires, against the same table.
@@ -133,16 +154,31 @@ function run(
 
   const input: CheckInput<CommandType> = { sql, principal, authority, command, payload: command.payload };
 
-  // 3. Scope. A person's membership covers the project; a credential covers named packages.
+  // 3. Scope. A person's membership covers the project; a credential covers what it names.
   if (principal.kind !== 'human') checkScope(handler, input, authority);
 
+  // Any cached outcome #11 returns for an identical retry must be returned here or later:
+  // only after current membership, role and scope have passed again (rule H04).
+  const key = principalKey(principal);
+  const used = first(
+    sql.exec<{ n: number }>(
+      'SELECT count(*) AS n FROM command_receipts WHERE principal_key = ? AND request_id = ?',
+      key,
+      envelope.request_id,
+    ),
+  );
+  if ((used?.n ?? 0) > 0) reject('request_id_conflict', 'request_id');
+
   // 4. References, then ownership.
-  const references = handler.references?.(command.payload) ?? collectIds(command.payload);
-  for (const id of references) {
-    if (!recordExists(sql, id)) reject('unknown_reference', 'payload');
+  const references = collectReferences(command.payload);
+  for (const id of handler.references?.(command.payload) ?? []) {
+    references.push({ id, field: 'payload' });
   }
   for (const id of Object.keys(envelope.expected_versions.contract_versions ?? {})) {
-    if (!recordExists(sql, id)) reject('unknown_reference', `expected_versions.contract_versions.${id}`);
+    references.push({ id, field: `expected_versions.contract_versions.${id}` });
+  }
+  for (const { id, field } of references) {
+    if (!resolves(sql, id)) reject('unknown_reference', field);
   }
   if (entry.ownership !== 'none') {
     // createRegistry guarantees `authorize` exists for these commands.
@@ -153,12 +189,23 @@ function run(
   // 5. Expected versions.
   checkVersions(sql, handler, input, authority);
 
-  // 6. The handler.
-  const events: EmittedEvent[] = [];
+  // 6. The handler. Each event is checked against its record and written as it is emitted,
+  //    so a handler can change a record more than once and describe each step.
+  const origin = {
+    actor: actorFor(principal, runId),
+    source: sourceFor(principal.kind),
+    request_id: envelope.request_id,
+    now,
+  };
+  const written: EventRecord[] = [];
   const context: MutationContext<CommandType> = {
     ...input,
     now,
     createRecord: (type, kind) => {
+      const expected = RECORD_TYPE_OF_KIND[kind];
+      if (expected !== undefined && expected !== type) {
+        throw new Error(`createRecord: a ${kind} id cannot name a ${type} record`);
+      }
       const id = newId(kind);
       sql.exec(
         'INSERT INTO records (id, type, version, created_at, updated_at) VALUES (?, ?, 1, ?, ?)',
@@ -170,13 +217,18 @@ function run(
       return { id, version: 1 };
     },
     bumpRecord: (id) => {
-      sql.exec('UPDATE records SET version = version + 1, updated_at = ? WHERE id = ?', now, id);
-      const row = first(sql.exec<{ version: number }>('SELECT version FROM records WHERE id = ?', id));
+      const row = first(
+        sql.exec<{ version: number }>(
+          'UPDATE records SET version = version + 1, updated_at = ? WHERE id = ? RETURNING version',
+          now,
+          id,
+        ),
+      );
       if (row === undefined) throw new Error(`bumpRecord: no record ${id}`);
       return row.version;
     },
     emit: (event) => {
-      events.push(event);
+      written.push(writeEvent(sql, meta, event, origin));
     },
     reject: (code, field) => reject(code, field),
   };
@@ -184,16 +236,7 @@ function run(
   if (isThenable(output)) throw new Error(`${command.type}: handlers must be synchronous`);
   const result = (output as { result?: Record<string, unknown> } | undefined)?.result ?? {};
 
-  // 7. Events, outbox rows and the receipt, in the same transaction as the change.
-  const actor = actorFor(principal, (envelope as Partial<AgentEnvelope>).agent?.run_id);
-  const written = events.map((event) =>
-    writeEvent(sql, meta, event, {
-      actor,
-      source: sourceFor(principal.kind),
-      request_id: envelope.request_id,
-      now,
-    }),
-  );
+  // 7. The receipt, in the same transaction as the change, its events and outbox rows.
   sql.exec(
     `INSERT INTO command_receipts
       (principal_key, request_id, command_type, content_hash, outcome, result, first_seq, last_seq,
@@ -212,11 +255,31 @@ function run(
   return { request_id: envelope.request_id, events: written, result };
 }
 
+/**
+ * An agent's identity block must match its credential's connection, and its run must be the
+ * one the authority port verified for that connection (#24 provides the real check). Without a
+ * verified run nothing is written, so an unverified run ID never reaches the event log.
+ */
+function checkIdentity(
+  principal: Principal,
+  envelope: Partial<AgentEnvelope>,
+  authority: Authority,
+): string | undefined {
+  if (principal.kind !== 'agent_run') return undefined;
+  const agent = envelope.agent;
+  if (agent === undefined) reject('identity_mismatch', 'agent');
+  if (agent.connection_id !== principal.connection_id) reject('identity_mismatch', 'agent.connection_id');
+  if (authority.run_id === undefined || authority.run_id !== agent.run_id) {
+    reject('identity_mismatch', 'agent.run_id');
+  }
+  return authority.run_id;
+}
+
 /** Writes one event and its outbox row. Used by commands and by project creation. */
 export function writeEvent(
   sql: SqlPort,
   meta: ProjectMeta,
-  event: EmittedEvent,
+  event: { readonly type: string; readonly record: EventRecord['record']; readonly payload?: object },
   origin: {
     readonly actor: EventRecord['actor'];
     readonly source: EventRecord['source'];
@@ -234,25 +297,26 @@ export function writeEvent(
   if (row === undefined || row.type !== event.record.type || row.version !== event.record.version) {
     throw new Error(`event ${event.type} does not match record ${event.record.id}`);
   }
-  const payload = JSON.stringify(event.payload ?? {});
-  const actor = JSON.stringify(origin.actor);
-  sql.exec(
-    `INSERT INTO events
-      (recovery_epoch, type, record_type, record_id, record_version, actor, source, causal_request_id,
-       server_time, payload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    meta.recovery_epoch,
-    event.type,
-    event.record.type,
-    event.record.id,
-    event.record.version,
-    actor,
-    origin.source,
-    origin.request_id,
-    origin.now,
-    payload,
-  );
-  const seq = sql.exec<{ seq: number }>('SELECT last_insert_rowid() AS seq').one().seq;
+  const payload = event.payload ?? {};
+  const seq = sql
+    .exec<{ seq: number }>(
+      `INSERT INTO events
+        (recovery_epoch, type, record_type, record_id, record_version, actor, source, causal_request_id,
+         server_time, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING seq`,
+      meta.recovery_epoch,
+      event.type,
+      event.record.type,
+      event.record.id,
+      event.record.version,
+      JSON.stringify(origin.actor),
+      origin.source,
+      origin.request_id,
+      origin.now,
+      JSON.stringify(payload),
+    )
+    .one().seq;
   sql.exec(
     "INSERT INTO outbox (event_seq, state, attempts, next_attempt_at, created_at) VALUES (?, 'pending', 0, ?, ?)",
     seq,
@@ -269,20 +333,31 @@ export function writeEvent(
     source: origin.source,
     causal_request_id: origin.request_id,
     server_time: origin.now,
-    payload: event.payload ?? {},
+    payload,
   });
 }
 
+/**
+ * A non-human principal acts only inside its credential's scope. An empty list is refused
+ * rather than read as "touches nothing", so a handler cannot grant project-wide reach by
+ * mistake; a project-wide command must say `'project'` and needs a project-wide credential.
+ */
 function checkScope(
   handler: HandlerDefinition<CommandType>,
   input: CheckInput<CommandType>,
   authority: Authority,
 ) {
   // createRegistry guarantees `scope` exists for commands non-human principals may send.
-  const packages = handler.scope!(input);
+  const touched = handler.scope!(input);
   const allowed = authority.scope;
-  for (const id of packages) {
-    if (allowed === undefined || !allowed.has(id)) reject('not_authorized', 'payload');
+  if (touched === 'project') {
+    if (allowed !== 'project') reject('not_authorized', 'payload');
+    return;
+  }
+  if (touched.length === 0) reject('not_authorized', 'payload');
+  for (const id of touched) {
+    if (allowed === undefined || (allowed !== 'project' && !allowed.has(id)))
+      reject('not_authorized', 'payload');
   }
 }
 
@@ -299,8 +374,7 @@ function checkVersions(
     switch (key) {
       case 'record_version': {
         if (handler.target === undefined) reject('invalid_envelope', field);
-        const id = handler.target(input.payload);
-        const current = recordVersion(sql, id);
+        const current = recordVersion(sql, handler.target(input.payload));
         if (current === undefined) reject('unknown_reference', 'payload');
         if (current !== expected.record_version) reject('stale_version', field);
         break;
@@ -328,6 +402,11 @@ function checkVersions(
           if (recordVersion(sql, id) !== version) reject('stale_version', `${field}.${id}`);
         }
         break;
+      default: {
+        // A key added to the protocol is refused until it is checked here, never skipped.
+        const unchecked: never = key;
+        reject('invalid_envelope', `expected_versions.${String(unchecked)}`);
+      }
     }
   }
 }
@@ -336,26 +415,42 @@ function recordVersion(sql: SqlPort, id: string): number | undefined {
   return first(sql.exec<{ version: number }>('SELECT version FROM records WHERE id = ?', id))?.version;
 }
 
-function recordExists(sql: SqlPort, id: string): boolean {
-  return recordVersion(sql, id) !== undefined;
+/** The ID exists in this project, as the kind of record its prefix says. */
+function resolves(sql: SqlPort, id: string): boolean {
+  const row = first(sql.exec<{ type: string }>('SELECT type FROM records WHERE id = ?', id));
+  if (row === undefined) return false;
+  const kind = idKind(id);
+  const expected = kind === undefined ? undefined : RECORD_TYPE_OF_KIND[kind];
+  return expected === undefined || row.type === expected;
 }
 
-/** Every string in the payload that is a well-formed record ID. Iterative: payloads are bounded. */
-export function collectIds(payload: unknown): string[] {
-  const found = new Set<string>();
-  const stack: unknown[] = [payload];
+/** References in the payload, by field name (see SINGLE_REFERENCE). Iterative: payloads are bounded. */
+export function collectReferences(payload: unknown): Array<{ id: string; field: string }> {
+  const found: Array<{ id: string; field: string }> = [];
+  const add = (value: unknown, field: string) => {
+    if (typeof value !== 'string') return;
+    const kind = idKind(value);
+    if (kind !== undefined && !NOT_RECORDS.has(kind)) found.push({ id: value, field });
+  };
+  const stack: Array<{ value: unknown; path: string }> = [{ value: payload, path: 'payload' }];
   while (stack.length > 0) {
-    const value = stack.pop();
-    if (typeof value === 'string') {
-      const kind = idKind(value);
-      if (kind !== undefined && !NOT_RECORDS.has(kind)) found.add(value);
-    } else if (Array.isArray(value)) {
-      stack.push(...(value as unknown[]));
-    } else if (value !== null && typeof value === 'object') {
-      stack.push(...Object.values(value));
+    const { value, path } = stack.pop()!;
+    if (value === null || typeof value !== 'object') continue;
+    const entries = Array.isArray(value)
+      ? value.map((item, index) => [String(index), item] as const)
+      : Object.entries(value);
+    for (const [key, child] of entries) {
+      const field = `${path}.${key}`;
+      if (STABLE_KEY_FIELDS.has(key)) continue;
+      if (SINGLE_REFERENCE.test(key)) add(child, field);
+      else if (LIST_REFERENCE.test(key) && Array.isArray(child)) {
+        child.forEach((item: unknown, index) => add(item, `${field}.${index}`));
+      } else if (KEYED_REFERENCE.test(key) && child !== null && typeof child === 'object') {
+        for (const id of Object.keys(child)) add(id, `${field}.${id}`);
+      } else stack.push({ value: child, path: field });
     }
   }
-  return [...found];
+  return found;
 }
 
 function isThenable(value: unknown): boolean {

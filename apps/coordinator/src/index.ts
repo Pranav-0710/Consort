@@ -8,6 +8,16 @@ import { handleRequest, type CoordinatorStub } from './worker/router.js';
 
 export { ProjectCoordinator };
 
+// The RPC stub is cast to CoordinatorStub below; this fails to compile if the object's method
+// stops matching what the router calls.
+type StubMatches = ProjectCoordinator['applyCommand'] extends (
+  ...args: Parameters<CoordinatorStub['applyCommand']>
+) => Awaited<ReturnType<CoordinatorStub['applyCommand']>>
+  ? true
+  : never;
+const stubMatches: StubMatches = true;
+void stubMatches;
+
 interface Env {
   readonly PROJECT_COORDINATOR: DurableObjectNamespace<ProjectCoordinator>;
 }

@@ -63,15 +63,29 @@ export function tableAuthority(entries: ReadonlyArray<readonly [Principal, Autho
   };
 }
 
-export function member(role: Role, scope?: readonly string[]): Authority {
-  return { role, membership_policy_version: 1, ...(scope === undefined ? {} : { scope: new Set(scope) }) };
+export function member(
+  role: Role,
+  options: { scope?: readonly string[] | 'project'; run_id?: string } = {},
+): Authority {
+  const scope = options.scope;
+  return {
+    role,
+    membership_policy_version: 1,
+    ...(scope === undefined ? {} : { scope: scope === 'project' ? 'project' : new Set(scope) }),
+    ...(options.run_id === undefined ? {} : { run_id: options.run_id }),
+  };
+}
+
+/** An agent run's standing: its credential scope and the run its connection is bound to. */
+export function agentMember(scope: readonly string[] | 'project' = 'project'): Authority {
+  return member('contributor', { scope, run_id: RUN });
 }
 
 /** Answers a question: bumps it and emits `question.answered`. */
 export const answerHandler = defineHandler({
   type: 'question.answer',
   target: (payload) => payload.question_id,
-  scope: () => [],
+  scope: () => 'project',
   authorize: () => undefined,
   apply: (ctx) => {
     const version = ctx.bumpRecord(ctx.payload.question_id);
@@ -96,6 +110,8 @@ export const featureHandler = defineHandler({
 
 export interface Fixture {
   readonly core: CoordinatorCore;
+  /** Messages of failures the core rolled back and answered with internal_error. */
+  readonly errors: string[];
   readonly storage: TestStorage;
   readonly authority: ReturnType<typeof tableAuthority>;
   readonly epoch: string;
@@ -113,7 +129,9 @@ export function setup(
 ): Fixture {
   const storage = options.storage ?? memoryStorage();
   const authority = tableAuthority(options.members ?? [[alice, member('contributor')]]);
+  const errors: string[] = [];
   const core = new CoordinatorCore(storage, {
+    reportError: (error) => errors.push(error instanceof Error ? error.message : String(error)),
     registry: createRegistry({ authority, handlers: options.handlers ?? [answerHandler, featureHandler] }),
     ...(options.migrations === undefined ? {} : { migrations: options.migrations }),
     ...(options.broadcast === undefined ? {} : { broadcast: options.broadcast }),
@@ -125,7 +143,7 @@ export function setup(
     if (!created.ok) throw new Error(`init failed: ${created.reason}`);
     epoch = created.recovery_epoch;
   }
-  return { core, storage, authority, epoch };
+  return { core, storage, authority, epoch, errors };
 }
 
 /** Inserts a record directly, standing in for the issue that will own its creation. */
