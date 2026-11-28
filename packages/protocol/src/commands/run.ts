@@ -2,6 +2,7 @@
 // registration, never from the payload, so none of these carries a package or user ID.
 import { z } from 'zod';
 
+import { ACKNOWLEDGEMENT_KINDS, type DeliveryObservationKind } from '../delivery.js';
 import { idSchema } from '../ids.js';
 import { LIMITS } from '../limits.js';
 import {
@@ -10,6 +11,7 @@ import {
   commitSha,
   contractVersions,
   reasonText,
+  repositoryRef,
   shortText,
   stableKey,
   versionNumber,
@@ -39,23 +41,35 @@ export const runPayloads = {
 
   /** Facts 3 and 5: what the agent itself reports. Delivery facts use `delivery.observe`. */
   'acknowledgement.record': z.strictObject({
-    kind: z.enum(['agent_acknowledged', 'application_reported']),
+    kind: z.enum(ACKNOWLEDGEMENT_KINDS),
     versions: basedOn,
+    /** The inbox item being acknowledged, when there is one. */
+    item_id: idSchema('inbox_item').optional(),
     change_request_id: idSchema('change_request').optional(),
     concerns: reasonText.optional(),
     evidence_ids: boundedList(idSchema('evidence')).optional(),
   }),
 
-  /** Placeholder for #9 and #35: facts 1 and 2, reported by the adapter, not the model. */
-  'delivery.observe': z.strictObject({
-    item_id: idSchema('inbox_item'),
-    observation: z.enum(['adapter_received', 'context_supplied']),
-    checkpoint: shortText.optional(),
-  }),
+  /**
+   * Placeholder for #35: facts 1 and 2, reported by the adapter, not the model. `queued` is
+   * recorded by the coordinator itself, so an adapter cannot report it.
+   */
+  'delivery.observe': z.discriminatedUnion('observation', [
+    z.strictObject({
+      item_id: idSchema('inbox_item'),
+      observation: z.literal('adapter_received' satisfies DeliveryObservationKind),
+    }),
+    z.strictObject({
+      item_id: idSchema('inbox_item'),
+      observation: z.literal('context_supplied' satisfies DeliveryObservationKind),
+      /** The client checkpoint, for example a hook event name. */
+      checkpoint: shortText,
+    }),
+  ]),
 
   /** Placeholder for #24: a branch, worktree or repository change needs a new checkout record. */
   'run.update_checkout': z.strictObject({
-    repository: shortText,
+    repository: repositoryRef,
     worktree: shortText,
     branch: shortText,
     commit: commitSha,

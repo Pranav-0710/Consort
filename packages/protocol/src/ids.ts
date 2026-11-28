@@ -54,6 +54,12 @@ export function idKind(value: string): IdKind | undefined {
   return kind !== undefined && PATTERNS[kind].test(value) ? kind : undefined;
 }
 
+/** A schema that accepts a well-formed ID of any known kind. */
+export const anyIdSchema = z
+  .string()
+  .max(80)
+  .refine((value) => idKind(value) !== undefined, 'expected a prefixed record id');
+
 /** A schema that accepts only IDs of one kind. */
 export function idSchema(kind: IdKind) {
   return z.string().regex(PATTERNS[kind], `expected a ${kind} id (${ID_PREFIXES[kind]}_…)`);

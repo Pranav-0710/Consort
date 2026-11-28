@@ -53,15 +53,26 @@ export const agreementDraft = z.strictObject({
   acceptance_criteria: boundedList(keyedText),
 });
 
+/**
+ * A repository as `owner/name`, identifier characters only. It is copied into other agents'
+ * context, so it must never be able to carry prose (rule H12).
+ */
+export const repositoryRef = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/(?!\.+$)[A-Za-z0-9._-]{1,100}$/,
+    'expected a repository as owner/name',
+  );
+
 /** An immutable artifact. In v1 a handoff is a commit pushed to the shared remote. */
 export const gitArtifact = z.strictObject({
-  repository: shortText,
+  repository: repositoryRef,
   commit: commitSha,
 });
 
 /** The artifact a check observed, with dirty state qualified (rule H08). */
 export const checkedArtifact = z.strictObject({
-  repository: shortText,
+  repository: repositoryRef,
   commit: commitSha,
   dirty: z.boolean(),
   /** Identifies the uncommitted content when `dirty` is true. */
