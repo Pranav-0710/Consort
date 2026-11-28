@@ -6,4 +6,42 @@ Cloudflare Worker ingress plus one SQLite-backed Durable Object per project: aut
 
 **May import:** `@consort/protocol`. ESLint enforces this (`eslint.config.mjs`).
 
-This is a placeholder created by #2. Real code starts in #10.
+## Layout
+
+| Path | What it holds |
+| --- | --- |
+| `src/index.ts` | Worker entry. Exports `ProjectCoordinator`. Its authenticator accepts nobody until sign-in (#19) and pairing (#21) exist. |
+| `src/worker/` | `router.ts` handles `POST /v1/projects/:id/commands`: authenticate, bounded body read, `validateAtIngress`, RPC to the project's object. |
+| `src/do/` | `project-coordinator.ts` is the thin Durable Object; `core.ts` is its logic (startup migrations, `init`, `applyCommand`). |
+| `src/db/` | `sql.ts` is the storage port (the subset of the Durable Object SQL API used); `migrations.ts` holds the ordered migrations. |
+| `src/mutations/` | `apply.ts` is the single mutation path; `registry.ts` defines what a handler declares; `production.ts` is the deployed registry (empty for now). |
+| `wrangler.jsonc` | Worker and Durable Object binding. No routes are configured. |
+
+## The mutation path
+
+Every command runs through `runMutation` inside one `transactionSync`, in this order:
+
+1. This object holds the project the command names.
+2. Current membership or credential status, loaded inside the transaction. For an agent, the identity block must name the credential's connection and the run the authority port verified; then the recovery epoch.
+3. The catalogue: principal kind, minimum role, a registered handler.
+4. Credential scope for agents and collectors (an empty list is refused; project-wide commands say `'project'`), then that the request ID is unused.
+5. Every reference resolves inside this project as the right kind of record, then the ownership rule.
+6. Every expected version, including authority versions. A key the coordinator cannot check is refused, never skipped.
+7. The handler. Each event and its outbox row is written as it is emitted, then the receipt.
+
+References are found by field name: `*_id` and `reply_to` hold one ID, `*_ids` a list, and the keys of a `*_versions` map are IDs. A test checks every command payload schema follows this. Free text is never read as a reference.
+
+A refusal or throw at any step rolls everything back. A refusal comes back as its error code; a bug comes back as `internal_error` ("nothing was changed"), because the rollback makes the outcome known. `outcome_unknown` is used only when the call to the object itself fails. The response and any broadcast happen only after commit.
+
+Handlers are synchronous. The SQL handle a handler receives stops working when the transaction ends, and a test rejects network, timer and promise APIs in `src/mutations/` and `src/commands/`.
+
+A fresh object has no tables and writes nothing until `init` creates the project; retrying `init` with the same request returns the original result. If a migration fails, the migration list is out of order or renamed, or storage was written by a newer build, every request gets `project_unavailable` until the object restarts.
+
+## Adding to it
+
+- Add a numbered migration to the end of `MIGRATIONS`. Never edit a released one.
+- Register handlers in `src/mutations/production.ts`. `createRegistry` refuses a handler for a command with an ownership rule but no `authorize`, one that non-human principals may send but that declares no `scope`, and one that cannot check a version its command requires.
+
+## Tests
+
+`npm test` runs on Node against `node:sqlite` through the same storage port. Nothing runs in workerd yet: `@cloudflare/vitest-pool-workers` 0.23.0 requires vitest 4, and this repo uses vitest 5. Behaviour specific to the Cloudflare runtime (RPC serialization, `blockConcurrencyWhile`, the real SQLite build) is therefore not covered by these tests.

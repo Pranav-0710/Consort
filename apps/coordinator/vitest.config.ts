@@ -1,10 +1,10 @@
 import { defineConfig } from 'vitest/config';
 
-// Coordinator tests have their own config, so the Cloudflare Workers test pool
-// (@cloudflare/vitest-pool-workers) can be added in #10 without touching the root config.
+// Coordinator tests run on Node against the StoragePort (src/db/sql.ts) backed by node:sqlite.
+// The Cloudflare Workers pool is not used yet: its latest release (0.23.0) needs vitest 4 and
+// this repo is on vitest 5. Nothing here runs in workerd.
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
-    passWithNoTests: true,
+    include: ['test/**/*.test.ts'],
   },
 });

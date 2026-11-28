@@ -19,6 +19,12 @@ export const ERROR_MESSAGES = {
   nesting_too_deep: 'The command is nested more deeply than the current limit.',
 
   // Raised by the coordinator (#10, #11) while checking a validated command.
+  project_not_found: 'No project exists with this ID. Projects are only created explicitly.',
+  project_unavailable:
+    'The project is temporarily unavailable. Nothing was changed. Try again later, then reconcile.',
+  command_unavailable: 'The coordinator does not accept this command yet. Nothing was changed.',
+  internal_error: 'The coordinator hit an internal error. Nothing was changed.',
+  unknown_reference: 'The command refers to a record that does not exist in this project.',
   not_a_member: 'You are not a current member of this project.',
   not_authorized: 'Your current role or ownership does not allow this command.',
   stale_version: 'The record changed since you last read it. Review the current version and try again.',
