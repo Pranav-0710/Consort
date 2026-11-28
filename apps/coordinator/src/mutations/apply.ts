@@ -83,9 +83,9 @@ export const RECORD_TYPE_OF_KIND: Partial<Record<IdKind, RecordType>> = {
  * hold a list, and the keys of a `*_versions` map are IDs. A test checks every command payload
  * schema follows this, so free text that happens to look like an ID is never read as one.
  */
-const SINGLE_REFERENCE = /(_id|^reply_to)$/;
-const LIST_REFERENCE = /_ids$/;
-const KEYED_REFERENCE = /_versions$/;
+export const SINGLE_REFERENCE = /(_id|^reply_to)$/;
+export const LIST_REFERENCE = /_ids$/;
+export const KEYED_REFERENCE = /_versions$/;
 /** Fields named like references that hold stable keys (letters, digits, `._-`), not record IDs. */
 export const STABLE_KEY_FIELDS: ReadonlySet<string> = new Set([
   'criterion_id',
@@ -198,6 +198,7 @@ function run(
     now,
   };
   const written: EventRecord[] = [];
+  let refusal: ProtocolError | undefined;
   const context: MutationContext<CommandType> = {
     ...input,
     now,
@@ -230,10 +231,15 @@ function run(
     emit: (event) => {
       written.push(writeEvent(sql, meta, event, origin));
     },
-    reject: (code, field) => reject(code, field),
+    reject: (code, field) => {
+      refusal ??= protocolError(code, { field });
+      return reject(code, field);
+    },
   };
   const output: unknown = handler.apply(context);
   if (isThenable(output)) throw new Error(`${command.type}: handlers must be synchronous`);
+  // A handler that catches its own refusal and carries on is still refused.
+  if (refusal !== undefined) throw new Rejection(refusal);
   const result = (output as { result?: Record<string, unknown> } | undefined)?.result ?? {};
 
   // 7. The receipt, in the same transaction as the change, its events and outbox rows.

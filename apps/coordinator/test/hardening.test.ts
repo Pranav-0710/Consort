@@ -10,7 +10,14 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { applyMigrations, MIGRATIONS } from '../src/db/migrations.js';
-import { collectReferences, runMutation, STABLE_KEY_FIELDS } from '../src/mutations/apply.js';
+import {
+  collectReferences,
+  KEYED_REFERENCE,
+  LIST_REFERENCE,
+  runMutation,
+  SINGLE_REFERENCE,
+  STABLE_KEY_FIELDS,
+} from '../src/mutations/apply.js';
 import type { Principal } from '../src/mutations/principal.js';
 import { createRegistry, DENY_ALL, defineHandler } from '../src/mutations/registry.js';
 
@@ -96,6 +103,35 @@ describe('agent identity binding', () => {
       ok: false,
       error: { code: 'identity_mismatch' },
     });
+  });
+
+  it('a handler that catches its own refusal is still refused, and writes nothing', () => {
+    const swallowing = defineHandler({
+      type: 'feature.create',
+      apply: (ctx) => {
+        try {
+          ctx.reject('not_authorized');
+        } catch {
+          // carries on regardless
+        }
+        const feature = ctx.createRecord('feature', 'feature');
+        ctx.emit({ type: 'feature.created', record: { type: 'feature', ...feature } });
+      },
+    });
+    const { core, storage, epoch } = setup({ handlers: [swallowing] });
+    const before = snapshot(storage.db);
+    expect(core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toMatchObject({
+      ok: false,
+      error: { code: 'not_authorized' },
+    });
+    expect(snapshot(storage.db)).toEqual(before);
+  });
+
+  it('command text that is not a string is refused, never thrown', () => {
+    const { core } = setup();
+    for (const bad of [undefined, null, 42, {}]) {
+      expect(core.applyCommand(alice, bad)).toMatchObject({ ok: false, error: { code: 'invalid_envelope' } });
+    }
   });
 
   it('a malformed principal from the Worker is refused outright', () => {
@@ -203,7 +239,7 @@ describe('references', () => {
     for (const [type, schema] of Object.entries(COMMAND_PAYLOADS)) {
       walkSchema(schema, '', '', (path, key, kind) => {
         found += 1;
-        const pattern = { single: /(_id|^reply_to)$/, list: /_ids$/, keyed: /_versions$/ }[kind];
+        const pattern = { single: SINGLE_REFERENCE, list: LIST_REFERENCE, keyed: KEYED_REFERENCE }[kind];
         if (!pattern.test(key)) problems.push(`${type}${path}: ID field not named as a reference`);
         if (STABLE_KEY_FIELDS.has(key)) problems.push(`${type}${path}: ID field listed as a stable key`);
       });

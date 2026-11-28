@@ -156,11 +156,13 @@ export class CoordinatorCore {
    * transaction. Responds and broadcasts only after that transaction has committed. Never
    * throws: a refusal or a rolled-back failure comes back as a result.
    */
-  applyCommand(principal: unknown, commandText: string): ApplyResult {
+  applyCommand(principal: unknown, commandText: unknown): ApplyResult {
     if (!isPrincipal(principal)) return this.#internalError(new TypeError('malformed principal'));
     if (this.#state.status === 'failed') return refuse('project_unavailable');
     if (this.#state.status === 'empty') return refuse('project_not_found');
 
+    if (typeof commandText !== 'string')
+      return { ok: false, error: protocolError('invalid_envelope', { field: 'command' }) };
     const validated = validateCommandJson(commandText, { principal: principal.kind });
     if (!validated.ok) return { ok: false, error: validated.error };
 
