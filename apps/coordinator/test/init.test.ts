@@ -32,7 +32,7 @@ describe('project creation', () => {
     expect(snapshot(storage.db)).toEqual(before);
   });
 
-  it('init creates the project once, with a random recovery epoch, event and outbox row', () => {
+  it('init creates the project once, with a random recovery epoch and its event, and queues nothing for runs', () => {
     const one = setup();
     const two = setup();
     expect(one.epoch).toMatch(/^ep_[A-Za-z0-9]{24}$/);
@@ -45,9 +45,8 @@ describe('project creation', () => {
     expect(db.prepare('SELECT type, record_id, source FROM events').all()).toEqual([
       { type: 'project.created', record_id: PROJECT, source: 'human_action' },
     ]);
-    expect(db.prepare('SELECT event_seq, state FROM outbox').all()).toEqual([
-      { event_seq: 1, state: 'pending' },
-    ]);
+    // The outbox holds items for agent runs only; web clients follow the event log (#13).
+    expect(db.prepare('SELECT count(*) AS n FROM outbox').get()).toEqual({ n: 0 });
 
     const before = snapshot(db);
     expect(one.core.init({ project_id: PROJECT, created_by: ALICE, request_id: requestId() })).toEqual({

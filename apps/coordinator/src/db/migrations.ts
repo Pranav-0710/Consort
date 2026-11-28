@@ -111,6 +111,45 @@ export const MIGRATIONS: readonly Migration[] = [
       'CREATE INDEX command_receipts_by_retention ON command_receipts (retain_until)',
     ],
   },
+  {
+    version: 3,
+    name: 'run_outbox',
+    statements: [
+      // The base outbox held one untargeted row per event, and nothing ever delivered it. Web
+      // clients follow the event log by cursor (#13); the outbox exists for agent runs, whose
+      // receipt must be durable (#12). Its old rows named no recipient, so they are dropped:
+      // every event they pointed at stays in the log.
+      'DROP TABLE outbox',
+      // One row per inbox item addressed to a run, written in the same transaction as the change
+      // that caused it (rule H05). `seq` is the item's position in that run's inbox. Rows are
+      // never deleted by delivery: they end acked, stalled or cancelled.
+      `CREATE TABLE outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL CHECK (seq >= 1),
+        item_id TEXT NOT NULL UNIQUE,
+        scope TEXT NOT NULL,
+        item TEXT NOT NULL,
+        recovery_epoch TEXT NOT NULL,
+        causal_request_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'sent', 'acked', 'stalled', 'cancelled')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        next_attempt_at TEXT NOT NULL,
+        last_sent_at TEXT,
+        settled_at TEXT,
+        cancel_reason TEXT,
+        created_at TEXT NOT NULL
+      )`,
+      'CREATE UNIQUE INDEX outbox_by_run_seq ON outbox (run_id, seq)',
+      'CREATE INDEX outbox_by_run_state_due ON outbox (run_id, state, next_attempt_at)',
+      // The last inbox position issued to each run, so a position is never reused, even after
+      // settled rows are pruned by the retention policy (#73).
+      `CREATE TABLE outbox_positions (
+        run_id TEXT PRIMARY KEY,
+        last_seq INTEGER NOT NULL CHECK (last_seq >= 1)
+      )`,
+    ],
+  },
 ];
 
 export type MigrationState =

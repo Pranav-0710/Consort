@@ -141,6 +141,10 @@ export function setup(
     now?: () => Date;
     /** False for members who cannot hold a window, such as an agent with no verified run. */
     issueWindows?: boolean;
+    transport?: CoordinatorOptions['transport'];
+    alarm?: CoordinatorOptions['alarm'];
+    outbox?: CoordinatorOptions['outbox'];
+    random?: CoordinatorOptions['random'];
   } = {},
 ): Fixture {
   const storage = options.storage ?? memoryStorage();
@@ -157,6 +161,10 @@ export function setup(
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.migrations === undefined ? {} : { migrations: options.migrations }),
     ...(options.broadcast === undefined ? {} : { broadcast: options.broadcast }),
+    ...(options.transport === undefined ? {} : { transport: options.transport }),
+    ...(options.alarm === undefined ? {} : { alarm: options.alarm }),
+    ...(options.outbox === undefined ? {} : { outbox: options.outbox }),
+    ...(options.random === undefined ? {} : { random: options.random }),
   });
   core.start();
   let epoch = '';

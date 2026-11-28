@@ -112,6 +112,7 @@ describe('schema migrations', () => {
         'meta',
         'events',
         'outbox',
+        'outbox_positions',
         'command_windows',
         'command_receipts',
         'schema_migrations',
@@ -123,7 +124,13 @@ describe('schema migrations', () => {
         .prepare(`SELECT name FROM pragma_index_info('${index}') ORDER BY seqno`)
         .all()
         .map((row) => (row as { name: string }).name);
-    expect(indexColumns('outbox_by_state_next_attempt')).toEqual(['state', 'next_attempt_at']);
+    expect(indexColumns('outbox_by_run_seq')).toEqual(['run_id', 'seq']);
+    expect(indexColumns('outbox_by_run_state_due')).toEqual(['run_id', 'state', 'next_attempt_at']);
+    expect(
+      storage.db
+        .prepare('SELECT "unique" AS u FROM pragma_index_list(\'outbox\') WHERE name = ?')
+        .get('outbox_by_run_seq'),
+    ).toEqual({ u: 1 });
     expect(indexColumns('command_receipts_by_principal_request')).toEqual(['principal_key', 'request_id']);
     const receiptIndexes = storage.db
       .prepare('SELECT name, "unique" AS u FROM pragma_index_list(\'command_receipts\')')
