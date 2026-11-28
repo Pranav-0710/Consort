@@ -18,6 +18,13 @@ One command shape, one table of who may send each command, and one validator, sh
 | `validate.ts` | `validateCommand` and `validateCommandJson`: bounds first, then envelope, catalogue and payload. |
 | `limits.ts` | Size and shape bounds. **Provisional** until #58 measures them and #69 sets them. |
 | `ids.ts`, `errors.ts`, `hash.ts` | ID-prefix helpers, stable error codes with default messages, and `canonicalPayloadHash`. |
+| `events.ts` | `EventRecord`: sequence, recovery epoch, type, record, actor, source, causal request ID, server time and payload. |
+| `inbox.ts` | The closed set of seven inbox item types. Participant text is wrapped as `{trust: 'untrusted', text}`. |
+| `delivery.ts` | Delivery observations (queued, adapter received, context supplied) and agent acknowledgements, as separate schemas. |
+| `status.ts` | `RunStatus` with one field per dimension and no combined status. |
+| `capabilities.ts` | Capability flags, each documented, detected, verified or disabled with a reason. |
+| `frames.ts`, `gap.ts` | WebSocket frames, and `checkSequence`, which tells a client to apply, ignore, fetch a gap or resync. |
+| `cursor.ts` | The opaque `Cursor` string. Its claims helpers are exported only from `@consort/protocol/internal`, for the coordinator. |
 
 ## Rules it encodes
 
