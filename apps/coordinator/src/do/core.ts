@@ -329,6 +329,9 @@ export class CoordinatorCore {
    * rollback can never restore them. A failure here only delays the cleanup.
    */
   #prune(now = this.#nowIso()): void {
+    // Only a schema this build understands is ever written: a failed, newer or empty object is
+    // left exactly as it is (stress G06, rule H11).
+    if (this.#state.status !== 'ready') return;
     try {
       this.#storage.transactionSync(() => pruneExpired(this.#storage.sql, now));
     } catch (failure) {

@@ -11,6 +11,8 @@
 //     same request ID is refused with request_id_conflict; read the receipt instead.
 //   - Any rejection is final for that request ID. To try again, reconcile current state and
 //     prepare a new command with a new request ID.
+//   - A receipt is readable only under the scope (and agent run) its window held. After any
+//     change of scope, wider or narrower, it reads as `unknown`: reconcile current state.
 //   - Reconcile through the receipt, never by spotting a request ID in the event stream: request
 //     IDs are visible to every member, so another member's event can carry the same ID. If the
 //     event stream must be used, match on the actor as well as `causal_request_id`.

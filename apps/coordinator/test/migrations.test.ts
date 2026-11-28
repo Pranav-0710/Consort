@@ -59,6 +59,31 @@ describe('schema migrations', () => {
     expect(snapshot(storage.db)).toEqual(before);
   });
 
+  it('a window or receipt request on a failed, newer-schema or empty object writes nothing', () => {
+    const storage = memoryStorage();
+    setup({ storage, migrations: [...MIGRATIONS, { version: LATEST + 1, name: 'newer', statements: [] }] });
+    const before = snapshot(storage.db);
+    const older = setup({ storage, init: false });
+    expect(older.core.state).toMatchObject({ status: 'failed' });
+    expect(older.core.issueCommandWindow(alice)).toMatchObject({
+      ok: false,
+      error: { code: 'project_unavailable' },
+    });
+    expect(older.core.readReceipt(alice, requestId())).toMatchObject({
+      ok: false,
+      error: { code: 'project_unavailable' },
+    });
+    expect(snapshot(storage.db)).toEqual(before);
+
+    const empty = setup({ init: false });
+    expect(empty.core.issueCommandWindow(alice)).toMatchObject({
+      ok: false,
+      error: { code: 'project_not_found' },
+    });
+    expect(snapshot(empty.storage.db)).toEqual({});
+    expect(empty.errors).toEqual([]);
+  });
+
   it('storage written by a newer build is refused rather than served (G06)', () => {
     const storage = memoryStorage();
     const { epoch } = setup({

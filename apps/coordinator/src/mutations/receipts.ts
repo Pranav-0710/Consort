@@ -115,6 +115,14 @@ export function checkRequest(
     }
     return retained(sql, row);
   }
+  // An expired receipt under the same key can only remain if pruning failed. It no longer
+  // counts, so it must not block this request's receipt.
+  sql.exec(
+    'DELETE FROM command_receipts WHERE principal_key = ? AND request_id = ? AND retain_until <= ?',
+    input.principalKey,
+    input.requestId,
+    input.now,
+  );
   const mine =
     first(
       sql.exec<{ n: number }>(
