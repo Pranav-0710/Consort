@@ -88,7 +88,7 @@ export interface MutationContext<T extends CommandType> extends CheckInput<T> {
   createRecord(type: RecordType, kind: IdKind): { readonly id: string; readonly version: 1 };
   /** Raises a record's version by one and returns the new version. */
   bumpRecord(id: string): number;
-  /** Writes an event and its outbox row now. It must describe the record's current version. */
+  /** Writes an event now. It must describe the record's current version. */
   emit(event: EmittedEvent): void;
   /** Refuses the command. Everything the handler wrote is rolled back. */
   reject(code: ErrorCode, field?: string): never;

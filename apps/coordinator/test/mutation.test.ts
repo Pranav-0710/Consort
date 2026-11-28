@@ -40,7 +40,7 @@ function answer(
 }
 
 describe('the transactional mutation path', () => {
-  it('a committed command writes its change, receipt, event and outbox row together', () => {
+  it('a committed command writes its change, receipt and event together', () => {
     const { core, storage, epoch } = setup();
     seedRecord(storage, 'question', QUESTION);
     const request = requestId();
@@ -65,10 +65,8 @@ describe('the transactional mutation path', () => {
       source: 'human_action',
       causal_request_id: request,
     });
-    expect(db.prepare('SELECT event_seq, state FROM outbox WHERE event_seq = 2').get()).toEqual({
-      event_seq: 2,
-      state: 'pending',
-    });
+    // Nothing was addressed to a run, so nothing is queued for one (#12).
+    expect(db.prepare('SELECT count(*) AS n FROM outbox').get()).toEqual({ n: 0 });
     expect(
       db
         .prepare('SELECT outcome, first_seq, last_seq FROM command_receipts WHERE request_id = ?')
@@ -231,7 +229,7 @@ describe('the transactional mutation path', () => {
           events,
           inTransaction: fixture.storage.inTransaction,
           persisted: fixture.storage.db
-            .prepare('SELECT count(*) AS n FROM outbox WHERE event_seq = ?')
+            .prepare('SELECT count(*) AS n FROM events WHERE seq = ?')
             .get(events[0]!.seq),
         });
       },
@@ -251,7 +249,7 @@ describe('the transactional mutation path', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('a failing broadcast does not undo the commit; the outbox keeps the delivery intent (C03)', () => {
+  it('a failing broadcast does not undo the commit; the event log keeps the event (C03)', () => {
     const { core, storage, epoch } = setup({
       broadcast: () => {
         throw new Error('socket gone');
@@ -259,9 +257,10 @@ describe('the transactional mutation path', () => {
     });
     const result = core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }));
     expect(result.ok).toBe(true);
-    expect(storage.db.prepare("SELECT count(*) AS n FROM outbox WHERE state = 'pending'").get()).toEqual({
-      n: 2,
-    });
+    expect(storage.db.prepare('SELECT type FROM events ORDER BY seq').all()).toEqual([
+      { type: 'project.created' },
+      { type: 'feature.created' },
+    ]);
   });
 
   it('membership is read inside the transaction: a member removed before commit is refused', () => {

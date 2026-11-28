@@ -35,6 +35,10 @@ import { isPrincipal, principalKey, type Principal } from '../mutations/principa
 import { pruneExpired, receiptStatus, writeReceipt } from '../mutations/receipts.js';
 import type { Authority, MutationRegistry } from '../mutations/registry.js';
 import { DEFAULT_RETRY_CONFIG, issueWindow, windowScope, type RetryConfig } from '../mutations/windows.js';
+import { DEFAULT_OUTBOX_CONFIG, type OutboxConfig } from '../outbox/config.js';
+import { Outbox } from '../outbox/outbox.js';
+import { NO_ALARM, NO_TRANSPORT, type AlarmPort, type RunTransport } from '../outbox/ports.js';
+import type { AckResult, CancelReason, OutboxStatus } from '../outbox/store.js';
 
 export type ApplyResult =
   | {
@@ -75,10 +79,18 @@ export interface CoordinatorOptions {
   /** Window duration, receipt grace period and storage limits. Provisional (#69). */
   readonly retry?: Partial<RetryConfig>;
   /**
-   * Called only after a commit, with the events it wrote. Delivery itself is #13; the outbox
-   * row already holds the intent, so a failure here loses nothing (stress C03).
+   * Called only after a commit, with the events it wrote, for web subscribers (#13). The event
+   * log already holds them, so a failure here loses nothing (stress C03).
    */
   readonly broadcast?: (events: readonly EventRecord[]) => void;
+  /** Agent adapter connections (#13). Defaults to none, so nothing is sent. */
+  readonly transport?: RunTransport;
+  /** The object's alarm, which drives outbox retries (#12). */
+  readonly alarm?: AlarmPort;
+  /** Outbox retry timing and limits. Provisional (#69). */
+  readonly outbox?: Partial<OutboxConfig>;
+  /** Jitter source for retry delays, in [0, 1). Defaults to Math.random. */
+  readonly random?: () => number;
   /**
    * Receives a failure that was rolled back and answered with internal_error. Defaults to
    * logging the error's name only, since messages can carry command content.
@@ -92,20 +104,70 @@ export class CoordinatorCore {
   readonly #storage: StoragePort;
   readonly #options: CoordinatorOptions;
   readonly #retry: RetryConfig;
+  readonly #outbox: Outbox;
   #state: MigrationState = { status: 'empty' };
 
   constructor(storage: StoragePort, options: CoordinatorOptions) {
     this.#storage = storage;
     this.#options = options;
     this.#retry = { ...DEFAULT_RETRY_CONFIG, ...options.retry };
+    this.#outbox = new Outbox({
+      storage,
+      authority: options.registry.authority,
+      transport: options.transport ?? NO_TRANSPORT,
+      alarm: options.alarm ?? NO_ALARM,
+      config: { ...DEFAULT_OUTBOX_CONFIG, ...options.outbox },
+      now: () => this.#now(),
+      random: options.random ?? Math.random,
+      published: (events) => this.#broadcast(events),
+      report: (error) => this.#report(error),
+    });
   }
 
-  /** Runs once per object start, inside blockConcurrencyWhile. Writes nothing to a fresh object. */
+  /**
+   * Runs once per object start, inside blockConcurrencyWhile. Writes nothing to a fresh object.
+   * Re-arms the delivery alarm from the outbox, since no timer survives a restart (rule H10).
+   */
   start(): MigrationState {
     this.#state = tableExists(this.#storage.sql, 'schema_migrations')
       ? applyMigrations(this.#storage, this.#migrations, () => this.#nowIso())
       : { status: 'empty' };
+    if (this.#state.status === 'ready') this.#outbox.rearm();
     return this.#state;
+  }
+
+  /** The alarm handler: sends every due outbox row to its connected run, then re-arms. */
+  deliver(): void {
+    if (this.#state.status === 'ready') this.#outbox.deliver();
+  }
+
+  /** A run's adapter connected (#13): it is sent everything it has not acknowledged. */
+  runConnected(runId: string): void {
+    if (this.#state.status === 'ready' && isId('run', runId)) this.#outbox.runConnected(runId);
+  }
+
+  /**
+   * The run durably stored its inbox up to `seq`. #13 calls this only after verifying the
+   * cursor and that it came from the run's current connection. Undefined when the object cannot
+   * serve, or the write failed.
+   */
+  acknowledgeDelivery(runId: string, seq: number): AckResult | undefined {
+    if (this.#state.status !== 'ready' || !isId('run', runId) || !Number.isSafeInteger(seq) || seq < 1) {
+      return undefined;
+    }
+    return this.#outbox.acknowledge(runId, seq);
+  }
+
+  /** Stops delivery to a run, for example when its credential is revoked (#22). */
+  cancelDeliveries(runId: string, reason: CancelReason): number | undefined {
+    if (this.#state.status !== 'ready' || !isId('run', runId)) return undefined;
+    return this.#outbox.cancelRun(runId, reason);
+  }
+
+  /** Unsettled items and the age of the oldest, for the run's transport status (#25). */
+  deliveryStatus(runId: string): OutboxStatus | undefined {
+    if (this.#state.status !== 'ready' || !isId('run', runId)) return undefined;
+    return this.#outbox.status(runId);
   }
 
   get state(): MigrationState {
@@ -392,12 +454,18 @@ export class CoordinatorCore {
     return { ok: false, error: protocolError('internal_error') };
   }
 
+  /** After a commit: tell web subscribers, then send whatever the commit queued for runs. */
   #afterCommit(events: readonly EventRecord[]): void {
+    this.#broadcast(events);
+    this.deliver();
+  }
+
+  #broadcast(events: readonly EventRecord[]): void {
     if (events.length === 0 || this.#options.broadcast === undefined) return;
     try {
       this.#options.broadcast(events);
     } catch (error) {
-      // The outbox row is the durable intent; delivery is retried from it, never from here.
+      // The event log is the durable record; subscribers catch up from it by cursor (#13).
       console.error('broadcast after commit failed', error instanceof Error ? error.name : 'unknown');
     }
   }

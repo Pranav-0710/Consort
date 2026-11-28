@@ -9,6 +9,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { StoragePort } from '../db/sql.js';
 import type { Principal } from '../mutations/principal.js';
 import { PRODUCTION_REGISTRY } from '../mutations/production.js';
+import type { AlarmPort } from '../outbox/ports.js';
 
 import {
   CoordinatorCore,
@@ -26,15 +27,34 @@ function storagePort(storage: DurableObjectStorage): StoragePort {
   };
 }
 
+/** The object's one alarm. Setting it is a storage write, so it commits like one. */
+function alarmPort(storage: DurableObjectStorage): AlarmPort {
+  const failed = (error: unknown) =>
+    console.error('alarm update failed', error instanceof Error ? error.name : 'unknown');
+  return {
+    set: (atMs) => void storage.setAlarm(atMs).catch(failed),
+    clear: () => void storage.deleteAlarm().catch(failed),
+  };
+}
+
 export class ProjectCoordinator extends DurableObject {
   readonly #core: CoordinatorCore;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
-    this.#core = new CoordinatorCore(storagePort(ctx.storage), { registry: PRODUCTION_REGISTRY });
+    // No transport until #13 adds adapter sockets: every run is offline, so nothing is sent.
+    this.#core = new CoordinatorCore(storagePort(ctx.storage), {
+      registry: PRODUCTION_REGISTRY,
+      alarm: alarmPort(ctx.storage),
+    });
     void ctx.blockConcurrencyWhile(async () => {
       this.#core.start();
     });
+  }
+
+  /** Outbox retries (#12). Delivery never throws, so the runtime never retries this handler. */
+  override alarm(): void {
+    this.#core.deliver();
   }
 
   /** Creates the project. Called only by the project-creation route (#20). */

@@ -11,7 +11,8 @@
 //   4. every referenced ID resolves inside this project, as the right kind of record; then the
 //      ownership rule, which needs resolved references
 //   5. every expected version, including the authority versions
-// then runs the handler, writing each event and its outbox row as the handler emits it, and
+// then runs the handler, writing each event (and any inbox item it queues, src/outbox) as the
+// handler emits it, and
 // finally the receipt. Any refusal or throw rolls the whole transaction back, so nothing
 // partial is ever visible. The caller responds and broadcasts only after commit, and records a
 // rejected receipt for refusals that came after the request-ID check (`progress.receipt`).
@@ -98,6 +99,8 @@ export const RECORD_TYPE_OF_KIND: Partial<Record<IdKind, RecordType>> = {
   run: 'run',
   handoff: 'handoff',
   evidence: 'evidence',
+  // Each inbox item has a delivery record, created when it is queued (src/outbox).
+  inbox_item: 'delivery',
 };
 
 /**
@@ -286,7 +289,7 @@ function run(
   if (refusal !== undefined) throw new Rejection(refusal);
   const result = (output as { result?: Record<string, unknown> } | undefined)?.result ?? {};
 
-  // 7. The receipt, in the same transaction as the change, its events and outbox rows.
+  // 7. The receipt, in the same transaction as the change, its events and any outbox rows.
   writeReceipt(sql, {
     ...pending,
     outcome: 'committed',
@@ -318,7 +321,10 @@ function checkIdentity(
   return authority.run_id;
 }
 
-/** Writes one event and its outbox row. Used by commands and by project creation. */
+/**
+ * Writes one event. Used by commands, project creation and the outbox. Web clients follow the
+ * event log by cursor (#13); items for agent runs are queued separately (src/outbox, #12).
+ */
 export function writeEvent(
   sql: SqlPort,
   meta: ProjectMeta,
@@ -360,12 +366,6 @@ export function writeEvent(
       JSON.stringify(payload),
     )
     .one().seq;
-  sql.exec(
-    "INSERT INTO outbox (event_seq, state, attempts, next_attempt_at, created_at) VALUES (?, 'pending', 0, ?, ?)",
-    seq,
-    origin.now,
-    origin.now,
-  );
   // Throws on a malformed event, which rolls the transaction back.
   return EventRecordSchema.parse({
     seq,
