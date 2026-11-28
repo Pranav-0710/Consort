@@ -94,6 +94,15 @@ export const MIGRATIONS: readonly Migration[] = [
       'CREATE UNIQUE INDEX command_receipts_by_principal_request ON command_receipts (principal_key, request_id)',
     ],
   },
+  {
+    version: 2,
+    name: 'receipt_retention',
+    statements: [
+      // Each receipt is kept until its window expires plus a grace period (#11, rule H04).
+      "ALTER TABLE command_receipts ADD COLUMN retain_until TEXT NOT NULL DEFAULT ''",
+      'CREATE INDEX command_receipts_by_retention ON command_receipts (retain_until)',
+    ],
+  },
 ];
 
 export type MigrationState =

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { formatId, type EventRecord } from '@consort/protocol';
 import { describe, expect, it } from 'vitest';
 
+import type { Principal } from '../src/mutations/principal.js';
 import { defineHandler } from '../src/mutations/registry.js';
 
 import {
@@ -19,13 +20,18 @@ import {
   RUN,
   seedRecord,
   setup,
+  expectOnlyRejectedReceipts,
 } from './support/harness.js';
 import { snapshot } from './support/sqlite.js';
 
 const QUESTION = formatId('question', 'questionAA01');
 const FEATURE = { title: 'Checkout', goal: 'Ship checkout' };
 
-function answer(epoch: string, version: number, options: { agent?: boolean; request?: string } = {}) {
+function answer(
+  epoch: string,
+  version: number,
+  options: { agent?: boolean; request?: string; as?: Principal } = {},
+) {
   return commandText(
     'question.answer',
     { question_id: QUESTION, text: 'Use the v2 schema.' },
@@ -80,7 +86,7 @@ describe('the transactional mutation path', () => {
     seedRecord(storage, 'question', QUESTION);
     // Both were prepared after reading version 1.
     const first = core.applyCommand(alice, answer(epoch, 1));
-    const second = core.applyCommand(blair, answer(epoch, 1));
+    const second = core.applyCommand(blair, answer(epoch, 1, { as: blair }));
     expect([first.ok, second.ok]).toEqual([true, false]);
     // The protocol's code for a version conflict is stale_version.
     expect(second).toMatchObject({
@@ -130,7 +136,7 @@ describe('the transactional mutation path', () => {
       ok: false,
       error: { code: 'not_authorized' },
     });
-    expect(snapshot(storage.db)).toEqual(before);
+    expectOnlyRejectedReceipts(storage, before, 1);
   });
 
   it('an event that misdescribes its record rolls the whole command back', () => {
@@ -186,7 +192,7 @@ describe('the transactional mutation path', () => {
       ok: false,
       error: { code: 'unknown_reference' },
     });
-    expect(snapshot(storage.db)).toEqual(before);
+    expectOnlyRejectedReceipts(storage, before, 3);
 
     // The same command naming a user this project does have goes through.
     const localOwner = formatId('user', 'localOwner01');
@@ -312,19 +318,19 @@ describe('the transactional mutation path', () => {
     expect(JSON.parse((actor as { actor: string }).actor)).toMatchObject({ kind: 'agent_run' });
   });
 
-  it('a reused request ID is refused and the first outcome is left unchanged', () => {
+  it('a reused request ID with different content is refused; an identical one replays', () => {
     const { core, storage, epoch } = setup();
     const request = requestId();
-    expect(core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch, request })).ok).toBe(
-      true,
-    );
+    const first = core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch, request }));
+    expect(first).toMatchObject({ ok: true, replayed: false });
     const before = snapshot(storage.db);
-    expect(
-      core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch, request })),
-    ).toMatchObject({
+    const changed = commandText('feature.create', { ...FEATURE, title: 'Changed' }, { epoch, request });
+    expect(core.applyCommand(alice, changed)).toMatchObject({
       ok: false,
       error: { code: 'request_id_conflict' },
     });
+    const again = core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch, request }));
+    expect(again).toEqual({ ...first, replayed: true });
     expect(snapshot(storage.db)).toEqual(before);
   });
 });

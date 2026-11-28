@@ -1,6 +1,7 @@
-// @consort/protocol: the command shape, catalogue and validator (#8), and the shape of
-// everything the coordinator sends out (#9), shared by the web client, the adapter and the
-// coordinator. Runtime-neutral: no Node built-ins, DOM or Cloudflare.
+// @consort/protocol: the command shape, catalogue and validator (#8), the shape of
+// everything the coordinator sends out (#9), and command windows and receipts (#11). Shared
+// by the web client, the adapter and the coordinator. Runtime-neutral: no Node built-ins, DOM
+// or Cloudflare.
 //
 // Cursor claims are deliberately absent: clients see only the opaque `Cursor` string. The
 // coordinator reads claims through `@consort/protocol/internal` (stress E04).
@@ -19,6 +20,7 @@ export * from './identity.js';
 export * from './ids.js';
 export * from './inbox.js';
 export * from './limits.js';
+export * from './receipts.js';
 export * from './status.js';
 export * from './validate.js';
 export * from './version.js';

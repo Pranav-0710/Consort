@@ -51,7 +51,8 @@ export type AuthorityResult =
  * bindings (#24) provide the real one; until then it is injected by tests only.
  */
 export interface AuthorityPort {
-  resolve(sql: SqlPort, principal: Principal, command: ValidatedCommand): AuthorityResult;
+  /** `command` is absent when the principal asks for a window or a receipt rather than a change. */
+  resolve(sql: SqlPort, principal: Principal, command?: ValidatedCommand): AuthorityResult;
 }
 
 /** The default: nobody is a member, so every command fails closed. */
