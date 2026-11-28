@@ -170,10 +170,10 @@ describe('cursors', () => {
     expect(Object.keys(internalApi)).toEqual(expect.arrayContaining(['parseCursor', 'CursorClaimsSchema']));
   });
 
-  it('clients see an opaque string; the coordinator recovers the exact claims', () => {
+  it('clients see a branded string; the coordinator recovers the exact claims', () => {
+    // Opaque by agreement only: the claims are readable base64url JSON, never secrets.
     const value = cursor();
     expect(CursorSchema.safeParse(value).success).toBe(true);
-    expect(value).not.toContain(claims.project_id);
     expect(parseCursor(value)).toEqual({
       claims,
       signedPart: value.slice(0, value.lastIndexOf('.')),
@@ -263,7 +263,12 @@ describe('run status', () => {
   const status = {
     run_id: id('run'),
     as_of: NOW,
-    connection: { state: 'connected', connection_generation: 2 },
+    connection: {
+      state: 'connected',
+      connection_generation: 2,
+      last_observed_at: NOW,
+      observation_expires_at: '2026-11-28T09:31:00Z',
+    },
     transport: { state: 'synchronized', last_seq: 7 },
     context: { generation: 1, continuity: 'confirmed' },
     acknowledgement: { state: 'pending' },
@@ -353,7 +358,13 @@ describe('frames', () => {
         server_time: NOW,
       },
       { kind: 'event', prev_seq: 0, event: event(), cursor: cursor() },
-      { kind: 'inbox', prev_seq: 5, seq: 7, item: INBOX_EXAMPLES['question.addressed'], cursor: cursor() },
+      {
+        kind: 'inbox',
+        recovery_epoch: id('recovery_epoch'),
+        prev_seq: 5,
+        item: INBOX_EXAMPLES['question.addressed'],
+        cursor: cursor(),
+      },
       { kind: 'snapshot_required', reason: 'history_compacted' },
       { kind: 'closing', reason: 'revoked', code: 'not_a_member', retry: false },
       { kind: 'backpressure', retry_after_ms: 2000 },
@@ -375,6 +386,13 @@ describe('frames', () => {
 });
 
 describe('gap detection', () => {
+  const at = (last_seq: number) => ({ recovery_epoch: id('recovery_epoch'), last_seq, from_snapshot: false });
+  const seqFrame = (prev_seq: number, seq: number) => ({
+    recovery_epoch: id('recovery_epoch'),
+    prev_seq,
+    seq,
+  });
+
   it('a missing prev_seq makes the caller fetch the gap before updating status', () => {
     // The client applied up to 5; this frame says the previous frame on the subscription was 6.
     const frame = {
@@ -383,7 +401,7 @@ describe('gap detection', () => {
       event: EventRecordSchema.parse(event(9)),
       cursor: cursor(),
     };
-    expect(checkSequence(5, frameSequence(frame))).toEqual({
+    expect(checkSequence(at(5), frameSequence(frame))).toEqual({
       action: 'fetch_gap',
       after_seq: 5,
       before_seq: 9,
@@ -391,14 +409,27 @@ describe('gap detection', () => {
   });
 
   it('applies a contiguous frame even though sequence numbers skip', () => {
-    expect(checkSequence(5, { prev_seq: 5, seq: 12 })).toEqual({ action: 'apply' });
-    expect(checkSequence(0, { prev_seq: 0, seq: 1 })).toEqual({ action: 'apply' });
+    expect(checkSequence(at(5), seqFrame(5, 12))).toEqual({ action: 'apply' });
+    expect(checkSequence(at(0), seqFrame(0, 1))).toEqual({ action: 'apply' });
   });
 
   it('ignores a redelivered frame and resyncs on an inconsistent stream', () => {
-    expect(checkSequence(12, { prev_seq: 5, seq: 12 })).toEqual({ action: 'duplicate' });
-    expect(checkSequence(12, { prev_seq: 3, seq: 8 })).toEqual({ action: 'duplicate' });
-    expect(checkSequence(8, { prev_seq: 5, seq: 12 })).toEqual({ action: 'resync' });
-    expect(checkSequence(0, { prev_seq: 9, seq: 9 })).toEqual({ action: 'resync' });
+    expect(checkSequence(at(12), seqFrame(5, 12))).toEqual({ action: 'duplicate' });
+    expect(checkSequence(at(12), seqFrame(3, 8))).toEqual({ action: 'duplicate' });
+    expect(checkSequence(at(8), seqFrame(5, 12))).toEqual({ action: 'resync' });
+    expect(checkSequence(at(0), seqFrame(9, 9))).toEqual({ action: 'resync' });
+  });
+
+  it('after a snapshot, the first frame may name an earlier prev_seq (filtered stream)', () => {
+    const snapshot = { ...at(10), from_snapshot: true };
+    expect(checkSequence(snapshot, seqFrame(7, 12))).toEqual({ action: 'apply' });
+    expect(checkSequence(snapshot, seqFrame(7, 9))).toEqual({ action: 'duplicate' });
+    expect(checkSequence(at(10), seqFrame(7, 12))).toEqual({ action: 'resync' });
+  });
+
+  it('a frame from another recovery epoch always forces a resync', () => {
+    // After a restore, sequence numbers restart: seq 5 is new, not a duplicate of the old 5.
+    const restored = { recovery_epoch: id('recovery_epoch', 2), prev_seq: 0, seq: 5 };
+    expect(checkSequence(at(100), restored)).toEqual({ action: 'resync' });
   });
 });

@@ -5,8 +5,8 @@
 // coordinator's sequence, never from laptop clocks.
 import { z } from 'zod';
 
-import { shortText, versionNumber } from './commands/common.js';
-import { idSchema } from './ids.js';
+import { versionNumber } from './commands/common.js';
+import { anyIdSchema, idSchema } from './ids.js';
 
 /** The kinds of record an event can change. */
 export const RECORD_TYPES = [
@@ -58,22 +58,39 @@ export const eventType = z
   .max(64)
   .regex(/^[a-z][a-z_]*\.[a-z][a-z_]*$/, 'expected an event type such as question.answered');
 
-export const EventRecordSchema = z.strictObject({
-  /** Position in the project's event order. Unique and increasing within a recovery epoch. */
-  seq: sequenceNumber,
-  recovery_epoch: idSchema('recovery_epoch'),
-  type: eventType,
-  record: z.strictObject({
-    type: z.enum(RECORD_TYPES),
-    id: shortText,
-    version: versionNumber,
-  }),
-  actor: EventActorSchema,
-  source: z.enum(EVENT_SOURCES),
-  /** The command that caused this event (invariant 5, rule H01). */
-  causal_request_id: idSchema('request'),
-  /** Coordinator time at commit. Ordering uses `seq`, not this. */
-  server_time: z.iso.datetime({ offset: true }),
-  payload: z.record(z.string(), z.unknown()),
-});
+/**
+ * The payload is an open record until the issues that emit each event add its type. Events go
+ * to web clients only; agents receive inbox items (frames.ts), so an event payload never
+ * reaches a model's context.
+ */
+export const EventRecordSchema = z
+  .strictObject({
+    /** Position in the project's event order. Unique and increasing within a recovery epoch. */
+    seq: sequenceNumber,
+    recovery_epoch: idSchema('recovery_epoch'),
+    type: eventType,
+    record: z.strictObject({
+      type: z.enum(RECORD_TYPES),
+      id: anyIdSchema,
+      version: versionNumber,
+    }),
+    actor: EventActorSchema,
+    source: z.enum(EVENT_SOURCES),
+    /** The command that caused this event (invariant 5, rule H01). */
+    causal_request_id: idSchema('request'),
+    /** Coordinator time at commit. Ordering uses `seq`, not this. */
+    server_time: z.iso.datetime({ offset: true }),
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .superRefine((event, ctx) => {
+    // `question.answered` must change a question record, and so on.
+    if (event.type.slice(0, event.type.indexOf('.')) !== event.record.type) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['type'],
+        input: event.type,
+        message: 'event type must start with its record type',
+      });
+    }
+  });
 export type EventRecord = z.infer<typeof EventRecordSchema>;

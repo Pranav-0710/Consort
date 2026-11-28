@@ -11,6 +11,7 @@ import {
   commitSha,
   contractVersions,
   reasonText,
+  repositoryRef,
   shortText,
   stableKey,
   versionNumber,
@@ -42,6 +43,8 @@ export const runPayloads = {
   'acknowledgement.record': z.strictObject({
     kind: z.enum(ACKNOWLEDGEMENT_KINDS),
     versions: basedOn,
+    /** The inbox item being acknowledged, when there is one. */
+    item_id: idSchema('inbox_item').optional(),
     change_request_id: idSchema('change_request').optional(),
     concerns: reasonText.optional(),
     evidence_ids: boundedList(idSchema('evidence')).optional(),
@@ -57,12 +60,13 @@ export const runPayloads = {
       'adapter_received',
       'context_supplied',
     ] as const satisfies readonly DeliveryObservationKind[]),
+    /** Required by the coordinator for `context_supplied` (see DeliveryObservationSchema). */
     checkpoint: shortText.optional(),
   }),
 
   /** Placeholder for #24: a branch, worktree or repository change needs a new checkout record. */
   'run.update_checkout': z.strictObject({
-    repository: shortText,
+    repository: repositoryRef,
     worktree: shortText,
     branch: shortText,
     commit: commitSha,

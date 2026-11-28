@@ -6,11 +6,14 @@
 // helpers are therefore exported from `@consort/protocol/internal`, not the public entry point.
 // A cursor never grants access: the coordinator authorizes every replay against current
 // membership and rejects a cursor whose claims do not match the caller (E04).
+//
+// Opaque by agreement, not by encryption: the claims are signed base64url JSON that anyone
+// holding the cursor can decode. They contain IDs and versions only, never secrets.
 import { z } from 'zod';
 
 import { versionNumber } from './commands/common.js';
 import { canonicalJson, utf8Encode } from './hash.js';
-import { idSchema } from './ids.js';
+import { anyIdSchema, idSchema } from './ids.js';
 import { PRINCIPAL_KINDS } from './identity.js';
 
 /** `c1.<claims>.<signature>`, base64url parts. Format version 1. */
@@ -31,10 +34,17 @@ export const CursorClaimsSchema = z.strictObject({
   principal: z.strictObject({
     kind: z.enum(PRINCIPAL_KINDS),
     /** The authenticated user, run or collector ID. */
-    id: z.string().min(1).max(80),
+    id: anyIdSchema,
   }),
-  /** The subscription's view, for example a feature room or a run's inbox. */
-  scope: z.string().min(1).max(120),
+  /**
+   * The subscription's view, for example `run-inbox` or `feature:feat_…`. A safe character set
+   * keeps every valid set of claims within the cursor's encoded length.
+   */
+  scope: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[A-Za-z0-9:._-]+$/),
   membership_policy_version: versionNumber,
   /** Last event delivered to this subscription. */
   seq: versionNumber,
@@ -65,7 +75,7 @@ export function signedPart(claims: CursorClaims): string {
 export function parseCursor(
   value: string,
 ): { claims: CursorClaims; signedPart: string; signature: string } | undefined {
-  if (!CURSOR_PATTERN.test(value)) return undefined;
+  if (typeof value !== 'string' || !CURSOR_PATTERN.test(value)) return undefined;
   const lastDot = value.lastIndexOf('.');
   const signed = value.slice(0, lastDot);
   const bytes = base64UrlDecode(signed.slice(3));

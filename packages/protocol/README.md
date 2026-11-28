@@ -23,7 +23,7 @@ One command shape, one table of who may send each command, and one validator, sh
 | `delivery.ts` | Delivery observations (queued, adapter received, context supplied) and agent acknowledgements, as separate schemas. |
 | `status.ts` | `RunStatus` with one field per dimension and no combined status. |
 | `capabilities.ts` | Capability flags, each documented, detected, verified or disabled with a reason. |
-| `frames.ts`, `gap.ts` | WebSocket frames, and `checkSequence`, which tells a client to apply, ignore, fetch a gap or resync. |
+| `frames.ts`, `gap.ts` | WebSocket frames (agents get `AgentServerFrameSchema`, which has no raw events), and `checkSequence`, which tells a client to apply, ignore, fetch a gap or resync. |
 | `cursor.ts` | The opaque `Cursor` string. Its claims helpers are exported only from `@consort/protocol/internal`, for the coordinator. |
 
 ## Rules it encodes

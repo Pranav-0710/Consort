@@ -19,17 +19,33 @@ export type AcknowledgementKind = (typeof ACKNOWLEDGEMENT_KINDS)[number];
 
 const when = z.iso.datetime({ offset: true });
 
-export const DeliveryObservationSchema = z.strictObject({
+const observationBase = {
   item_id: idSchema('inbox_item'),
   run_id: idSchema('run'),
   context_generation: versionNumber,
-  kind: z.enum(DELIVERY_OBSERVATION_KINDS),
-  /** `coordinator` queues; the adapter or a hook observes receipt and context supply. */
-  observed_by: z.enum(['coordinator', 'adapter', 'hook']),
-  /** The client checkpoint, for example a hook event name, when context was supplied. */
-  checkpoint: shortText.optional(),
   observed_at: when,
-});
+};
+
+/**
+ * Each kind can only be observed by the component that sees it: the coordinator queues, the
+ * adapter receives, and the adapter or a hook supplies context at a named checkpoint. The
+ * coordinator can never record receipt or context supply on a client's behalf.
+ */
+export const DeliveryObservationSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ ...observationBase, kind: z.literal('queued'), observed_by: z.literal('coordinator') }),
+  z.strictObject({
+    ...observationBase,
+    kind: z.literal('adapter_received'),
+    observed_by: z.literal('adapter'),
+  }),
+  z.strictObject({
+    ...observationBase,
+    kind: z.literal('context_supplied'),
+    observed_by: z.enum(['adapter', 'hook']),
+    /** The client checkpoint, for example a hook event name. */
+    checkpoint: shortText,
+  }),
+]);
 export type DeliveryObservation = z.infer<typeof DeliveryObservationSchema>;
 
 export const AcknowledgementSchema = z.strictObject({

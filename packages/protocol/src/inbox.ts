@@ -63,6 +63,7 @@ export const InboxItemSchema = z.discriminatedUnion('type', [
     question_id: idSchema('question'),
     question_version: versionNumber,
     text: UntrustedTextSchema,
+    /** Stable keys only (letters, digits, `._-`, at most 40), so they cannot carry prose. */
     related_requirement_ids: z.array(stableKey).max(50).optional(),
   }),
   z.strictObject({
