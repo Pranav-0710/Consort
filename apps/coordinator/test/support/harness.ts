@@ -123,7 +123,10 @@ export interface Fixture {
   readonly windows: Map<string, string>;
 }
 
-/** Windows of the most recent fixture, so commandText can name the sender's window. */
+/**
+ * Windows of the most recent fixture, so commandText can name the sender's window. A test that
+ * builds commands for two fixtures passes `window` explicitly for the earlier one.
+ */
 let activeWindows = new Map<string, string>();
 
 export function setup(
@@ -136,6 +139,8 @@ export function setup(
     init?: boolean;
     retry?: CoordinatorOptions['retry'];
     now?: () => Date;
+    /** False for members who cannot hold a window, such as an agent with no verified run. */
+    issueWindows?: boolean;
   } = {},
 ): Fixture {
   const storage = options.storage ?? memoryStorage();
@@ -161,17 +166,21 @@ export function setup(
     epoch = created.recovery_epoch;
   }
   const windows = new Map<string, string>();
+  // A failure to issue is a test bug, never a silent fallback that would surface later as
+  // command_window_invalid in place of the refusal the test meant to check.
   const refresh = (principal: Principal) => {
     const issued = core.issueCommandWindow(principal);
-    if (issued.ok) windows.set(principalKey(principal), issued.window.command_window_id);
-    else windows.delete(principalKey(principal));
+    if (!issued.ok) throw new Error(`harness: could not issue a window: ${issued.error.code}`);
+    windows.set(principalKey(principal), issued.window.command_window_id);
   };
-  if (epoch !== '') for (const [principal] of members) refresh(principal);
+  const issue = epoch !== '' && options.issueWindows !== false;
+  if (issue) for (const [principal] of members) refresh(principal);
   const authority: ReturnType<typeof tableAuthority> = {
     resolve: table.resolve,
     set: (principal, standing) => {
       table.set(principal, standing);
-      if (epoch !== '') refresh(principal);
+      if (standing === undefined) windows.delete(principalKey(principal));
+      else if (issue) refresh(principal);
     },
   };
   activeWindows = windows;

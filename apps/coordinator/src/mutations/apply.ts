@@ -66,6 +66,7 @@ export interface PendingReceipt {
   readonly commandType: string;
   readonly contentHash: string;
   readonly windowId: string;
+  readonly scope: string;
   readonly retainUntil: string;
 }
 
@@ -180,7 +181,7 @@ function run(
   if (principal.kind !== 'human') checkScope(handler, input, authority);
 
   // The command window, checked against current standing and the current epoch.
-  const windowExpires = checkWindow(sql, {
+  const window = checkWindow(sql, {
     windowId: envelope.command_window_id,
     principal,
     authority,
@@ -195,17 +196,19 @@ function run(
     principalKey: key,
     requestId: envelope.request_id,
     contentHash: command.contentHash,
+    windowId: envelope.command_window_id,
     now,
     config: options.retry,
   });
   if (retained !== undefined) return { kind: 'replayed', request_id: envelope.request_id, retained };
-  const retainUntil = new Date(Date.parse(windowExpires) + options.retry.graceMs).toISOString();
+  const retainUntil = new Date(Date.parse(window.expiresAt) + options.retry.graceMs).toISOString();
   const pending: PendingReceipt = {
     principalKey: key,
     requestId: envelope.request_id,
     commandType: command.type,
     contentHash: command.contentHash,
     windowId: envelope.command_window_id,
+    scope: window.scope,
     retainUntil,
   };
   options.progress.receipt = pending;

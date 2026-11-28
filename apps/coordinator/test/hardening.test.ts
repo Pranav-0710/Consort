@@ -99,6 +99,7 @@ describe('agent identity binding', () => {
   it('an agent whose run the authority port has not verified writes nothing', () => {
     const { core, storage, epoch } = setup({
       members: [[aliceAgent, member('contributor', { scope: 'project' })]],
+      issueWindows: false,
     });
     seedRecord(storage, 'question', QUESTION);
     expect(core.applyCommand(aliceAgent, answer(epoch, { agent: true }))).toMatchObject({

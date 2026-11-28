@@ -24,6 +24,8 @@ export interface RetryConfig {
   readonly graceMs: number;
   /** Receipts kept per project. At the limit, new commands are refused; none is evicted early. */
   readonly maxLiveReceipts: number;
+  /** Receipts kept per principal, so one member cannot fill the project's limit for everyone. */
+  readonly maxLiveReceiptsPerPrincipal: number;
   /** Unexpired windows one principal may hold at once. */
   readonly maxLiveWindowsPerPrincipal: number;
 }
@@ -32,6 +34,7 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
   windowMs: 15 * 60 * 1000,
   graceMs: 24 * 60 * 60 * 1000,
   maxLiveReceipts: 50_000,
+  maxLiveReceiptsPerPrincipal: 5_000,
   maxLiveWindowsPerPrincipal: 16,
 };
 
@@ -58,10 +61,12 @@ export function issueWindow(
 ): CommandWindow {
   const now = input.now.toISOString();
   const key = principalKey(input.principal);
-  // An expired window can never be used again, so its row has no further purpose.
-  sql.exec('DELETE FROM command_windows WHERE expires_at <= ?', now);
   const live = first(
-    sql.exec<{ n: number }>('SELECT count(*) AS n FROM command_windows WHERE principal_key = ?', key),
+    sql.exec<{ n: number }>(
+      'SELECT count(*) AS n FROM command_windows WHERE principal_key = ? AND expires_at > ?',
+      key,
+      now,
+    ),
   );
   if ((live?.n ?? 0) >= input.config.maxLiveWindowsPerPrincipal) {
     throw new Rejection(protocolError('limit_exceeded', { limit: input.config.maxLiveWindowsPerPrincipal }));
@@ -83,7 +88,7 @@ export function issueWindow(
   return window;
 }
 
-/** Refuses a command whose window does not hold. Returns the window's expiry. */
+/** Refuses a command whose window does not hold. Returns the window's expiry and scope. */
 export function checkWindow(
   sql: SqlPort,
   input: {
@@ -93,7 +98,7 @@ export function checkWindow(
     readonly recoveryEpoch: string;
     readonly now: string;
   },
-): string {
+): { readonly expiresAt: string; readonly scope: string } {
   const row = first(
     sql.exec<{ principal_key: string; scope: string; recovery_epoch: string; expires_at: string }>(
       'SELECT principal_key, scope, recovery_epoch, expires_at FROM command_windows WHERE id = ?',
@@ -107,7 +112,7 @@ export function checkWindow(
     throw new Rejection(protocolError('recovery_epoch_mismatch', { field }));
   }
   if (row.expires_at <= input.now || row.scope !== windowScope(input.authority)) invalid(field);
-  return row.expires_at;
+  return { expiresAt: row.expires_at, scope: row.scope };
 }
 
 function invalid(field: string): never {

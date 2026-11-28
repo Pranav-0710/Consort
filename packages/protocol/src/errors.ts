@@ -25,7 +25,7 @@ export const ERROR_MESSAGES = {
   command_unavailable: 'The coordinator does not accept this command yet. Nothing was changed.',
   internal_error: 'The coordinator hit an internal error. Nothing was changed.',
   limit_exceeded:
-    'The project has reached a storage limit for retained outcomes. Nothing was changed. Try again later.',
+    'A provisional limit for this project or principal was reached. Nothing was changed. Try again later.',
   unknown_reference: 'The command refers to a record that does not exist in this project.',
   not_a_member: 'You are not a current member of this project.',
   not_authorized: 'Your current role or ownership does not allow this command.',

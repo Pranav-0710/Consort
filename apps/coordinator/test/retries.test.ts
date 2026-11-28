@@ -16,13 +16,23 @@ import {
   seedRecord,
   setup,
 } from './support/harness.js';
-import { snapshot } from './support/sqlite.js';
+import { snapshot, type TestStorage } from './support/sqlite.js';
 
 const FEATURE = { title: 'Checkout', goal: 'Ship checkout' };
 const QUESTION = formatId('question', 'questionAA01');
 const START = Date.parse('2026-11-28T10:00:00.000Z');
 const RETRY = { windowMs: 60_000, graceMs: 120_000, maxLiveReceipts: 50, maxLiveWindowsPerPrincipal: 4 };
 const BASE = `https://coordinator.test/v1/projects/${PROJECT}`;
+
+/**
+ * Everything except command windows, whose expired rows are pruned as housekeeping. Pruning an
+ * expired window changes nothing anyone can use, so it does not count as a mutation.
+ */
+function projectState(storage: TestStorage): Record<string, number> {
+  const { command_windows: _windows, ...rest } = snapshot(storage.db);
+  void _windows;
+  return rest;
+}
 
 /** A fixture with a clock the test moves forward. */
 function timed(options: Parameters<typeof setup>[0] = {}) {
@@ -81,16 +91,24 @@ describe('command windows', () => {
     });
   });
 
-  it('a command naming an expired window returns window_expired and mutates nothing (C06)', () => {
+  it('an old command retried after its window expired is refused and mutates nothing (C06)', () => {
     const fixture = timed();
+    const request = requestId();
+    const text = feature(fixture.epoch, request);
+    expect(fixture.core.applyCommand(alice, text).ok).toBe(true);
     fixture.advance(RETRY.windowMs);
-    const before = snapshot(fixture.storage.db);
+    const before = projectState(fixture.storage);
     // The protocol's code for an expired window is command_window_invalid.
-    expect(fixture.core.applyCommand(alice, feature(fixture.epoch))).toMatchObject({
+    expect(fixture.core.applyCommand(alice, text)).toMatchObject({
       ok: false,
       error: { code: 'command_window_invalid' },
     });
-    expect(snapshot(fixture.storage.db)).toEqual(before);
+    expect(projectState(fixture.storage)).toEqual(before);
+    // Its receipt is still there to read: the client reconciles through it.
+    expect(fixture.core.readReceipt(alice, request)).toMatchObject({
+      ok: true,
+      receipt: { status: 'committed' },
+    });
   });
 
   it('a window from an earlier recovery epoch is rejected with epoch_mismatch', () => {

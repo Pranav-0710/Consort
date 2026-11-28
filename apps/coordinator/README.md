@@ -41,7 +41,14 @@ A fresh object has no tables and writes nothing until `init` creates the project
 
 A command window is issued by `POST /v1/projects/:id/command-windows` and is bound to the principal, its current scope (and an agent's verified run) and the recovery epoch. A command naming a window that is unknown, expired, another principal's or issued under a different scope gets `command_window_invalid`; one from an earlier epoch gets `recovery_epoch_mismatch`. Neither writes anything.
 
-Every command that passes membership, role, scope and window checks leaves a receipt: committed, or rejected with its error, so a retry gets the same answer. Receipts are keyed by principal and kept until their window expires plus a grace period. `GET /v1/projects/:id/commands/:requestId` returns the caller's own receipt as committed, rejected or unknown; another principal's receipt reads as unknown. At the receipt limit new commands are refused; a live receipt is never evicted. The durations and limits in `windows.ts` are provisional until #69.
+Every command that passes membership, role, scope and window checks leaves a receipt: committed, or rejected with its error. A receipt is bound to the principal, the window it was made under and that window's scope (and agent run):
+
+- The same request ID and content under the same window returns the retained outcome and writes nothing. Any rejection is final for that request ID.
+- The same ID with different content, or under a different window, gets `request_id_conflict`. A client never resends a request under a new window; it reads the receipt instead, so a request can never run twice.
+- `GET /v1/projects/:id/commands/:requestId` returns the caller's own receipt as committed, rejected or unknown. Another principal's receipt, or one made under a scope or run the caller no longer holds, reads as unknown.
+- Reconcile through the receipt, never by finding a request ID in the event stream: request IDs are visible to every member.
+
+Receipts are kept until their window expires plus a grace period, and expired receipts and windows are pruned in a transaction of their own before each command. At the per-principal or per-project receipt limit, new commands get `limit_exceeded` (HTTP 429 with `Retry-After`); a live receipt is never evicted, and an identical retry is still answered. The durations and limits in `windows.ts` are provisional until #69.
 
 ## Adding to it
 

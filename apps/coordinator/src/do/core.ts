@@ -32,9 +32,9 @@ import {
 } from '../mutations/apply.js';
 import { newId } from '../mutations/ids.js';
 import { isPrincipal, principalKey, type Principal } from '../mutations/principal.js';
-import { receiptStatus, writeReceipt } from '../mutations/receipts.js';
+import { pruneExpired, receiptStatus, writeReceipt } from '../mutations/receipts.js';
 import type { Authority, MutationRegistry } from '../mutations/registry.js';
-import { DEFAULT_RETRY_CONFIG, issueWindow, type RetryConfig } from '../mutations/windows.js';
+import { DEFAULT_RETRY_CONFIG, issueWindow, windowScope, type RetryConfig } from '../mutations/windows.js';
 
 export type ApplyResult =
   | {
@@ -179,6 +179,8 @@ export class CoordinatorCore {
         firstSeq: event.seq,
         lastSeq: event.seq,
         windowId: null,
+        // The creator's standing before membership exists: a member with no package scope.
+        scope: windowScope({ role: 'admin', membership_policy_version: 0 }),
         now: nowIso,
         retainUntil: new Date(now.getTime() + this.#retry.windowMs + this.#retry.graceMs).toISOString(),
       });
@@ -191,6 +193,7 @@ export class CoordinatorCore {
 
   /** Issues a command window bound to the caller, its current scope and the recovery epoch. */
   issueCommandWindow(principal: unknown): WindowResult {
+    this.#prune();
     return this.#withStanding(principal, (sql, acting, standing) => ({
       ok: true,
       window: issueWindow(sql, {
@@ -211,9 +214,14 @@ export class CoordinatorCore {
     if (!isId('request', requestId)) {
       return { ok: false, error: protocolError('invalid_envelope', { field: 'request_id' }) };
     }
-    return this.#withStanding(principal, (sql, acting) => ({
+    return this.#withStanding(principal, (sql, acting, standing) => ({
       ok: true,
-      receipt: receiptStatus(sql, principalKey(acting), requestId, this.#nowIso()),
+      receipt: receiptStatus(sql, {
+        principalKey: principalKey(acting),
+        requestId,
+        scope: windowScope(standing.authority),
+        now: this.#nowIso(),
+      }),
     }));
   }
 
@@ -235,6 +243,7 @@ export class CoordinatorCore {
 
     const acting: Principal = principal;
     const options: MutationOptions = { now: this.#nowIso(), retry: this.#retry, progress: {} };
+    this.#prune(options.now);
     // The refusal is recorded before it leaves the callback, so recognising it does not depend
     // on transactionSync rethrowing the very same exception object.
     let refused: ProtocolError | undefined;
@@ -315,12 +324,32 @@ export class CoordinatorCore {
     }
   }
 
+  /**
+   * Removes expired receipts and windows in a transaction of its own, so a refused command's
+   * rollback can never restore them. A failure here only delays the cleanup.
+   */
+  #prune(now = this.#nowIso()): void {
+    try {
+      this.#storage.transactionSync(() => pruneExpired(this.#storage.sql, now));
+    } catch (failure) {
+      this.#report(failure);
+    }
+  }
+
   /** Records a refusal as a rejected receipt, in its own transaction after the rollback. */
   #recordRejection(options: MutationOptions, error: ProtocolError): void {
     const pending = options.progress.receipt;
     if (pending === undefined) return;
     try {
-      this.#storage.transactionSync(() =>
+      this.#storage.transactionSync(() => {
+        // An expired receipt under the same key can only remain if pruning failed; it no longer
+        // counts, so it must not block this one.
+        this.#storage.sql.exec(
+          'DELETE FROM command_receipts WHERE principal_key = ? AND request_id = ? AND retain_until <= ?',
+          pending.principalKey,
+          pending.requestId,
+          options.now,
+        );
         writeReceipt(this.#storage.sql, {
           ...pending,
           outcome: 'rejected',
@@ -328,8 +357,8 @@ export class CoordinatorCore {
           firstSeq: null,
           lastSeq: null,
           now: options.now,
-        }),
-      );
+        });
+      });
     } catch (failure) {
       // The refusal still stands; without its receipt a retry is checked afresh.
       this.#report(failure);

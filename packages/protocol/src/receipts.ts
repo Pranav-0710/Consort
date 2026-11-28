@@ -5,6 +5,15 @@
 // request ID with the same content returns its retained outcome instead of applying twice. A
 // client whose request timed out does not know the outcome: it asks for the receipt before
 // deciding anything, and treats `unknown` as unknown, never as failure or success.
+//
+// Rules for clients (#27, #28):
+//   - Resend a request only under the window it was first sent with. Under any other window the
+//     same request ID is refused with request_id_conflict; read the receipt instead.
+//   - Any rejection is final for that request ID. To try again, reconcile current state and
+//     prepare a new command with a new request ID.
+//   - Reconcile through the receipt, never by spotting a request ID in the event stream: request
+//     IDs are visible to every member, so another member's event can carry the same ID. If the
+//     event stream must be used, match on the actor as well as `causal_request_id`.
 import { z } from 'zod';
 
 import { COMMAND_TYPES } from './commands/index.js';

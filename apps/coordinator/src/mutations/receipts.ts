@@ -1,11 +1,17 @@
 // Command receipts: retained outcomes that make retries safe (rules H04, H06; invariant 5).
 //
 // Every command that gets past membership, window and scope checks leaves a receipt: committed
-// with its result and events, or rejected with its error. A retry with the same request ID and
-// content returns that outcome and writes nothing; the same ID with different content is a
-// conflict and never reinterprets the original. Receipts are keyed by principal, so one principal
-// never sees another's. Each is kept until its window expires plus a grace period. At the storage
-// limit new commands are refused with limit_exceeded: a live receipt is never evicted early.
+// with its result and events, or rejected with its error. A receipt is bound to the principal,
+// the window it was made under and the scope (and agent run) that window held:
+//   - The same request ID with the same content under the same window returns that outcome and
+//     writes nothing. Any rejection is final for that request ID.
+//   - The same ID with different content, or under a different window, is refused with
+//     request_id_conflict: the client reads the receipt instead of resending, so a request ID
+//     never moves to a new window and never runs twice.
+//   - One principal never sees another's receipt, and a receipt reads as unknown once the
+//     reader's scope or run no longer matches the one it was made under.
+// Each receipt is kept until its window expires plus a grace period. At the storage limits new
+// commands are refused with limit_exceeded: a live receipt is never evicted early.
 import { protocolError, type ProtocolError, type ReceiptStatus } from '@consort/protocol';
 
 import { first, type SqlPort } from '../db/sql.js';
@@ -21,8 +27,13 @@ interface ReceiptRow {
   readonly result: string;
   readonly first_seq: number | null;
   readonly last_seq: number | null;
+  readonly command_window_id: string | null;
+  readonly scope: string;
   readonly created_at: string;
 }
+
+const COLUMNS =
+  'command_type, content_hash, outcome, result, first_seq, last_seq, command_window_id, scope, created_at';
 
 export type Retained =
   | {
@@ -32,22 +43,13 @@ export type Retained =
     }
   | { readonly outcome: 'rejected'; readonly error: ProtocolError };
 
-/** A live receipt for this principal and request, or undefined. */
-function liveReceipt(
-  sql: SqlPort,
-  principalKey: string,
-  requestId: string,
-  now: string,
-): ReceiptRow | undefined {
-  return first(
-    sql.exec<ReceiptRow>(
-      `SELECT command_type, content_hash, outcome, result, first_seq, last_seq, created_at
-       FROM command_receipts WHERE principal_key = ? AND request_id = ? AND retain_until > ?`,
-      principalKey,
-      requestId,
-      now,
-    ),
-  );
+/**
+ * Removes receipts and windows that have outlived their use. Run in its own transaction before
+ * a command, so a refused command's rollback cannot bring an expired row back.
+ */
+export function pruneExpired(sql: SqlPort, now: string): void {
+  sql.exec('DELETE FROM command_receipts WHERE retain_until <= ?', now);
+  sql.exec('DELETE FROM command_windows WHERE expires_at <= ?', now);
 }
 
 function eventsOf(sql: SqlPort, row: ReceiptRow): Array<{ seq: number; type: string }> {
@@ -71,10 +73,26 @@ function retained(sql: SqlPort, row: ReceiptRow): Retained {
     : { outcome: 'rejected', error: JSON.parse(row.result) as ProtocolError };
 }
 
+function receiptFor(
+  sql: SqlPort,
+  principalKey: string,
+  requestId: string,
+  now: string,
+): ReceiptRow | undefined {
+  return first(
+    sql.exec<ReceiptRow>(
+      `SELECT ${COLUMNS} FROM command_receipts WHERE principal_key = ? AND request_id = ? AND retain_until > ?`,
+      principalKey,
+      requestId,
+      now,
+    ),
+  );
+}
+
 /**
- * Called only after current membership, window and scope have passed again (E02). Returns the
- * retained outcome of an identical retry, refuses a reused ID with different content, and
- * otherwise makes room for this command's receipt or refuses it at the limit.
+ * Called only after current membership, role, scope and window have passed again (E02).
+ * Returns the retained outcome of an identical retry under the same window, refuses a reused
+ * ID otherwise, and for a new request makes sure its receipt fits within the limits.
  */
 export function checkRequest(
   sql: SqlPort,
@@ -82,28 +100,36 @@ export function checkRequest(
     readonly principalKey: string;
     readonly requestId: string;
     readonly contentHash: string;
+    readonly windowId: string;
     readonly now: string;
     readonly config: RetryConfig;
   },
 ): Retained | undefined {
-  // An expired receipt has outlived its window and grace period; its ID is never reused within a
-  // valid window, because that window has also expired.
-  sql.exec('DELETE FROM command_receipts WHERE retain_until <= ?', input.now);
-  const row = first(
-    sql.exec<ReceiptRow>(
-      `SELECT command_type, content_hash, outcome, result, first_seq, last_seq, created_at
-       FROM command_receipts WHERE principal_key = ? AND request_id = ?`,
-      input.principalKey,
-      input.requestId,
-    ),
-  );
+  const row = receiptFor(sql, input.principalKey, input.requestId, input.now);
   if (row !== undefined) {
     if (row.content_hash !== input.contentHash) {
       throw new Rejection(protocolError('request_id_conflict', { field: 'request_id' }));
     }
+    if (row.command_window_id !== input.windowId) {
+      throw new Rejection(protocolError('request_id_conflict', { field: 'command_window_id' }));
+    }
     return retained(sql, row);
   }
-  const live = first(sql.exec<{ n: number }>('SELECT count(*) AS n FROM command_receipts'))?.n ?? 0;
+  const mine =
+    first(
+      sql.exec<{ n: number }>(
+        'SELECT count(*) AS n FROM command_receipts WHERE principal_key = ? AND retain_until > ?',
+        input.principalKey,
+        input.now,
+      ),
+    )?.n ?? 0;
+  if (mine >= input.config.maxLiveReceiptsPerPrincipal) {
+    throw new Rejection(protocolError('limit_exceeded', { limit: input.config.maxLiveReceiptsPerPrincipal }));
+  }
+  const live =
+    first(
+      sql.exec<{ n: number }>('SELECT count(*) AS n FROM command_receipts WHERE retain_until > ?', input.now),
+    )?.n ?? 0;
   if (live >= input.config.maxLiveReceipts) {
     throw new Rejection(protocolError('limit_exceeded', { limit: input.config.maxLiveReceipts }));
   }
@@ -123,6 +149,8 @@ export function writeReceipt(
     readonly firstSeq: number | null;
     readonly lastSeq: number | null;
     readonly windowId: string | null;
+    /** The window's scope (see windowScope), checked again when the receipt is read. */
+    readonly scope: string;
     readonly now: string;
     readonly retainUntil: string;
   },
@@ -130,8 +158,8 @@ export function writeReceipt(
   sql.exec(
     `INSERT INTO command_receipts
       (principal_key, request_id, command_type, content_hash, outcome, result, first_seq, last_seq,
-       command_window_id, created_at, retain_until)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       command_window_id, scope, created_at, retain_until)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     receipt.principalKey,
     receipt.requestId,
     receipt.commandType,
@@ -141,21 +169,30 @@ export function writeReceipt(
     receipt.firstSeq,
     receipt.lastSeq,
     receipt.windowId,
+    receipt.scope,
     receipt.now,
     receipt.retainUntil,
   );
 }
 
-/** The caller's own receipt. Anything else, including another principal's, is `unknown`. */
+/**
+ * The caller's own receipt, read under the caller's current scope and run. Anything else,
+ * including another principal's receipt or one made under a scope or run the caller no longer
+ * holds, is `unknown` (rule H06).
+ */
 export function receiptStatus(
   sql: SqlPort,
-  principalKey: string,
-  requestId: string,
-  now: string,
+  input: {
+    readonly principalKey: string;
+    readonly requestId: string;
+    readonly scope: string;
+    readonly now: string;
+  },
 ): ReceiptStatus {
-  const row = liveReceipt(sql, principalKey, requestId, now);
-  if (row === undefined) return { request_id: requestId, status: 'unknown' };
-  const common = { request_id: requestId, command_type: row.command_type, recorded_at: row.created_at };
+  const row = receiptFor(sql, input.principalKey, input.requestId, input.now);
+  if (row === undefined || row.scope !== input.scope)
+    return { request_id: input.requestId, status: 'unknown' };
+  const common = { request_id: input.requestId, command_type: row.command_type, recorded_at: row.created_at };
   const outcome = retained(sql, row);
   return outcome.outcome === 'committed'
     ? { ...common, status: 'committed', events: outcome.events.map((e) => e.seq), result: outcome.result }

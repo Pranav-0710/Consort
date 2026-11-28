@@ -28,7 +28,11 @@ export async function postCommand(
   if (!validated.ok) return errorResponse(validated.error);
   return call(
     () => stub.applyCommand(principal, text),
-    (result) => (result.ok ? Response.json(result, { status: 200 }) : errorResponse(result.error)),
+    (result) =>
+      result.ok
+        ? Response.json(result, { status: 200 })
+        : errorResponse(result.error, result.replayed === true),
+    'outcome_unknown',
   );
 }
 
@@ -36,6 +40,8 @@ export function postCommandWindow(stub: CoordinatorStub, principal: Principal): 
   return call(
     () => stub.issueCommandWindow(principal),
     (result) => (result.ok ? Response.json(result.window, { status: 201 }) : errorResponse(result.error)),
+    // An unconfirmed window is harmless: the client asks for another.
+    'project_unavailable',
   );
 }
 
@@ -46,17 +52,29 @@ export function getReceipt(
 ): Promise<Response> {
   return call(
     () => stub.readReceipt(principal, requestId),
-    (result) => (result.ok ? Response.json(result.receipt, { status: 200 }) : errorResponse(result.error)),
+    (result) =>
+      result.ok
+        ? Response.json(result.receipt, { status: 200, headers: { 'cache-control': 'no-store' } })
+        : errorResponse(result.error),
+    // A failed read changes nothing; the client simply asks again.
+    'project_unavailable',
   );
 }
 
-async function call<T>(invoke: () => Promise<T>, respond: (result: T) => Response): Promise<Response> {
+/**
+ * Calls the object. If the call itself fails, a command may have committed before it did, so
+ * the client must query (outcome_unknown); a failed read or window request changed nothing.
+ */
+async function call<T>(
+  invoke: () => Promise<T>,
+  respond: (result: T) => Response,
+  onFailure: 'outcome_unknown' | 'project_unavailable',
+): Promise<Response> {
   let result: T;
   try {
     result = await invoke();
   } catch {
-    // The call may have committed before it failed: the client must query, not assume.
-    return errorResponse(protocolError('outcome_unknown'));
+    return errorResponse(protocolError(onFailure));
   }
   return respond(result);
 }
@@ -81,8 +99,14 @@ const STATUS: Partial<Record<ErrorCode, number>> = {
   internal_error: 500,
 };
 
-export function errorResponse(error: ProtocolError): Response {
-  return Response.json({ ok: false, error }, { status: STATUS[error.code] ?? 400 });
+/** Provisional: how long a client should wait before trying again at a limit (#69). */
+const RETRY_AFTER_SECONDS = 60;
+
+export function errorResponse(error: ProtocolError, replayed = false): Response {
+  const status = STATUS[error.code] ?? 400;
+  const headers: Record<string, string> =
+    status === 429 ? { 'retry-after': String(RETRY_AFTER_SECONDS) } : {};
+  return Response.json({ ok: false, error, ...(replayed ? { replayed: true } : {}) }, { status, headers });
 }
 
 /** Reads the body as UTF-8, giving up as soon as it passes `limit` bytes. */

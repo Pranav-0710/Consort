@@ -98,8 +98,16 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 2,
     name: 'receipt_retention',
     statements: [
-      // Each receipt is kept until its window expires plus a grace period (#11, rule H04).
+      // Each receipt is kept until its window expires plus a grace period (#11, rule H04), and
+      // records the scope its window held, so reading it later is checked against that scope.
       "ALTER TABLE command_receipts ADD COLUMN retain_until TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE command_receipts ADD COLUMN scope TEXT NOT NULL DEFAULT 'scope:member'",
+      // Receipts written before this migration get the default retention from their creation
+      // time (15-minute window plus a day of grace), in toISOString's format so comparisons hold.
+      // A row whose creation time cannot be read keeps '' and counts as expired.
+      `UPDATE command_receipts
+         SET retain_until = coalesce(strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+15 minutes', '+1 day'), '')
+       WHERE retain_until = ''`,
       'CREATE INDEX command_receipts_by_retention ON command_receipts (retain_until)',
     ],
   },
