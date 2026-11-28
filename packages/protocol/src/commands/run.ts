@@ -54,15 +54,18 @@ export const runPayloads = {
    * Placeholder for #35: facts 1 and 2, reported by the adapter, not the model. `queued` is
    * recorded by the coordinator itself, so an adapter cannot report it.
    */
-  'delivery.observe': z.strictObject({
-    item_id: idSchema('inbox_item'),
-    observation: z.enum([
-      'adapter_received',
-      'context_supplied',
-    ] as const satisfies readonly DeliveryObservationKind[]),
-    /** Required by the coordinator for `context_supplied` (see DeliveryObservationSchema). */
-    checkpoint: shortText.optional(),
-  }),
+  'delivery.observe': z.discriminatedUnion('observation', [
+    z.strictObject({
+      item_id: idSchema('inbox_item'),
+      observation: z.literal('adapter_received' satisfies DeliveryObservationKind),
+    }),
+    z.strictObject({
+      item_id: idSchema('inbox_item'),
+      observation: z.literal('context_supplied' satisfies DeliveryObservationKind),
+      /** The client checkpoint, for example a hook event name. */
+      checkpoint: shortText,
+    }),
+  ]),
 
   /** Placeholder for #24: a branch, worktree or repository change needs a new checkout record. */
   'run.update_checkout': z.strictObject({

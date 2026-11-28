@@ -362,6 +362,7 @@ describe('frames', () => {
         kind: 'inbox',
         recovery_epoch: id('recovery_epoch'),
         prev_seq: 5,
+        seq: 8,
         item: INBOX_EXAMPLES['question.addressed'],
         cursor: cursor(),
       },

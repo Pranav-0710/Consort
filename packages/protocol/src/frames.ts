@@ -15,7 +15,7 @@ import { versionNumber } from './commands/common.js';
 import { CursorSchema } from './cursor.js';
 import { ProtocolVersionSchema } from './envelope.js';
 import { ERROR_MESSAGES, type ErrorCode } from './errors.js';
-import { EventRecordSchema } from './events.js';
+import { EventRecordSchema, sequenceNumber } from './events.js';
 import { idSchema } from './ids.js';
 import { InboxItemSchema } from './inbox.js';
 
@@ -58,11 +58,19 @@ export const EventFrameSchema = z.strictObject({
   cursor: CursorSchema,
 });
 
-/** The item's `source_seq` is the frame's sequence. */
+/**
+ * One inbox item on a run's inbox subscription. `seq` is the item's position in that inbox,
+ * assigned by the coordinator and strictly increasing per subscription. It is deliberately not
+ * `item.source_seq`: one event can create several items for the same run (an accepted shared
+ * change can add a revision and a reconciliation obligation), and each needs its own position
+ * so neither is mistaken for a duplicate. A subscription carries event frames or inbox frames,
+ * never both, so each stream has one order.
+ */
 export const InboxFrameSchema = z.strictObject({
   kind: z.literal('inbox'),
   recovery_epoch: idSchema('recovery_epoch'),
   prev_seq: versionNumber,
+  seq: sequenceNumber,
   item: InboxItemSchema,
   cursor: CursorSchema,
 });
@@ -121,5 +129,5 @@ export function frameSequence(frame: z.infer<typeof EventFrameSchema> | z.infer<
 } {
   return frame.kind === 'event'
     ? { recovery_epoch: frame.event.recovery_epoch, prev_seq: frame.prev_seq, seq: frame.event.seq }
-    : { recovery_epoch: frame.recovery_epoch, prev_seq: frame.prev_seq, seq: frame.item.source_seq };
+    : { recovery_epoch: frame.recovery_epoch, prev_seq: frame.prev_seq, seq: frame.seq };
 }

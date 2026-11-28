@@ -13,8 +13,8 @@ import { z } from 'zod';
 
 import { versionNumber } from './commands/common.js';
 import { canonicalJson, utf8Encode } from './hash.js';
-import { anyIdSchema, idSchema } from './ids.js';
-import { PRINCIPAL_KINDS } from './identity.js';
+import { idSchema } from './ids.js';
+import type { PrincipalKind } from './identity.js';
 
 /** `c1.<claims>.<signature>`, base64url parts. Format version 1. */
 const CURSOR_PATTERN = /^c1\.[A-Za-z0-9_-]{1,1024}\.[A-Za-z0-9_-]{16,128}$/;
@@ -31,11 +31,15 @@ export type Cursor = z.infer<typeof CursorSchema>;
 export const CursorClaimsSchema = z.strictObject({
   project_id: idSchema('project'),
   recovery_epoch: idSchema('recovery_epoch'),
-  principal: z.strictObject({
-    kind: z.enum(PRINCIPAL_KINDS),
-    /** The authenticated user, run or collector ID. */
-    id: anyIdSchema,
-  }),
+  /** The authenticated principal; the ID kind always matches the principal kind. */
+  principal: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('human' satisfies PrincipalKind), id: idSchema('user') }),
+    z.strictObject({ kind: z.literal('agent_run' satisfies PrincipalKind), id: idSchema('run') }),
+    z.strictObject({
+      kind: z.literal('evidence_collector' satisfies PrincipalKind),
+      id: idSchema('collector'),
+    }),
+  ]),
   /**
    * The subscription's view, for example `run-inbox` or `feature:feat_…`. A safe character set
    * keeps every valid set of claims within the cursor's encoded length.

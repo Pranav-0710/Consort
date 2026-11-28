@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AgentServerFrameSchema,
   CAPABILITY_FLAGS,
+  checkSequence,
   ClientFrameSchema,
   DeliveryObservationSchema,
   EventRecordSchema,
@@ -115,7 +116,7 @@ describe('run status never shows an unbacked positive state', () => {
           state: 'connected',
           connection_generation: 1,
           last_observed_at: NOW,
-          observation_expires_at: NOW,
+          observation_expires_at: '2026-11-28T09:31:00Z',
         },
         acknowledgement: {
           state: 'acknowledged',
@@ -205,7 +206,7 @@ describe('cursor hardening', () => {
       {
         project_id: longest('prj'),
         recovery_epoch: longest('ep'),
-        principal: { kind: 'evidence_collector', id: longest('conn') },
+        principal: { kind: 'evidence_collector', id: longest('col') },
         scope: 'x'.repeat(120),
         membership_policy_version: Number.MAX_SAFE_INTEGER,
         seq: Number.MAX_SAFE_INTEGER,
@@ -238,3 +239,91 @@ describe('cursor hardening', () => {
     expect(parseCursor(42 as unknown as string)).toBeUndefined();
   });
 });
+
+describe('second review of #87', () => {
+  it('two inbox items from one event both apply on the inbox stream (S7)', () => {
+    const epoch = id('recovery_epoch');
+    // One accepted shared change (event 20) creates a revision and a reconciliation item.
+    const first = { kind: 'inbox' as const, recovery_epoch: epoch, prev_seq: 4, seq: 5 };
+    const second = { kind: 'inbox' as const, recovery_epoch: epoch, prev_seq: 5, seq: 6 };
+    const state = { recovery_epoch: epoch, last_seq: 4, from_snapshot: false };
+    expect(checkSequence(state, first)).toEqual({ action: 'apply' });
+    expect(checkSequence({ ...state, last_seq: 5 }, second)).toEqual({ action: 'apply' });
+    const item = handoffItem('example/shop');
+    const frame = { ...second, item: { ...item, source_seq: 20 }, cursor: cursorFor() };
+    expect(AgentServerFrameSchema.safeParse(frame).success).toBe(true);
+  });
+
+  it('delivery.observe requires a checkpoint for context supply (N8)', () => {
+    const run = (payload: object) =>
+      validateCommand(envelope('delivery.observe', { payload }), { principal: 'agent_run' }).ok;
+    expect(
+      run({ item_id: id('inbox_item'), observation: 'context_supplied', checkpoint: 'PostToolUse' }),
+    ).toBe(true);
+    expect(run({ item_id: id('inbox_item'), observation: 'context_supplied' })).toBe(false);
+    expect(run({ item_id: id('inbox_item'), observation: 'adapter_received' })).toBe(true);
+  });
+
+  it('a connection cannot expire before it was observed (N9)', () => {
+    const connection = {
+      state: 'connected',
+      connection_generation: 1,
+      last_observed_at: '2026-11-28T09:30:00Z',
+      observation_expires_at: '2026-11-28T09:29:00Z',
+    };
+    const status = RunStatusSchema.safeParse({
+      run_id: id('run'),
+      as_of: NOW,
+      connection,
+      transport: { state: 'unknown', last_seq: 0 },
+      context: { generation: 0, continuity: 'unconfirmed' },
+      acknowledgement: { state: 'none' },
+      checkout: { freshness: 'unknown' },
+      delivery: { queued: 0, adapter_received: 0, context_supplied: 0 },
+      plan: { state: 'none' },
+      inbox: { pending: 0 },
+      reconciliation: { open_obligations: 0 },
+      uncertain_effects: { count: 0 },
+    });
+    expect(status.success).toBe(false);
+  });
+
+  it('a cursor principal ID must match its kind (N11)', () => {
+    expect(() =>
+      formatCursor(
+        {
+          project_id: id('project'),
+          recovery_epoch: id('recovery_epoch'),
+          principal: { kind: 'human', id: id('run') } as never,
+          scope: 'run-inbox',
+          membership_policy_version: 1,
+          seq: 1,
+          retention_boundary: 1,
+        },
+        'c2lnbmF0dXJlLW9mLXRlc3Q',
+      ),
+    ).toThrow();
+  });
+
+  it('a repository name of only dots is rejected (N7)', () => {
+    for (const repository of ['a/..', 'a/.', 'owner/...']) {
+      expect(InboxItemSchema.safeParse(handoffItem(repository)).success, repository).toBe(false);
+    }
+    expect(InboxItemSchema.safeParse(handoffItem('owner/.github')).success).toBe(true);
+  });
+});
+
+function cursorFor() {
+  return formatCursor(
+    {
+      project_id: id('project'),
+      recovery_epoch: id('recovery_epoch'),
+      principal: { kind: 'agent_run', id: id('run') },
+      scope: 'run-inbox',
+      membership_policy_version: 1,
+      seq: 6,
+      retention_boundary: 1,
+    },
+    'c2lnbmF0dXJlLW9mLXRlc3Q',
+  );
+}

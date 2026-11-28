@@ -59,7 +59,10 @@ export const agreementDraft = z.strictObject({
  */
 export const repositoryRef = z
   .string()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9._-]{1,100}$/, 'expected a repository as owner/name');
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/(?!\.+$)[A-Za-z0-9._-]{1,100}$/,
+    'expected a repository as owner/name',
+  );
 
 /** An immutable artifact. In v1 a handoff is a commit pushed to the shared remote. */
 export const gitArtifact = z.strictObject({

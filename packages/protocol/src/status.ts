@@ -15,14 +15,19 @@ const count = z.int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 const connection = z.discriminatedUnion('state', [
   z.strictObject({ state: z.literal('not_connected') }),
-  z.strictObject({
-    state: z.literal('connected'),
-    connection_generation: versionNumber,
-    /** Connected means observed recently, never "no error seen" (invariant 8). */
-    last_observed_at: when,
-    /** After this the coordinator shows `disconnected` unless a new observation arrives. */
-    observation_expires_at: when,
-  }),
+  z
+    .strictObject({
+      state: z.literal('connected'),
+      connection_generation: versionNumber,
+      /** Connected means observed recently, never "no error seen" (invariant 8). */
+      last_observed_at: when,
+      /** After this the coordinator shows `disconnected` unless a new observation arrives. */
+      observation_expires_at: when,
+    })
+    .refine((c) => Date.parse(c.last_observed_at) < Date.parse(c.observation_expires_at), {
+      path: ['observation_expires_at'],
+      message: 'an observation must expire after it was made',
+    }),
   z.strictObject({ state: z.literal('disconnected'), last_observed_at: when.optional() }),
   z.strictObject({
     state: z.literal('needs_attention'),
