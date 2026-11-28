@@ -1,0 +1,12 @@
+// Coordinator Worker and its per-project Durable Object (issue #10).
+// No routes or custom domains are configured: nothing is deployed until sign-in (#19) exists.
+{
+  "name": "consort-coordinator",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [{ "name": "PROJECT_COORDINATOR", "class_name": "ProjectCoordinator" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProjectCoordinator"] }],
+}

@@ -1,0 +1,160 @@
+// Ordered schema migrations (issue #10, stress G06).
+//
+// Each migration runs in its own transaction together with the row that records it in
+// `schema_migrations`, so a failure leaves the schema exactly at the previous version. The
+// coordinator refuses every request while any migration is pending or failed, and also when
+// storage was written by a newer build than this one (a downgrade): it never serves a schema it
+// does not understand. Each later issue appends its own numbered migration; released migrations
+// are never edited.
+import { first, tableExists, type SqlPort, type StoragePort } from './sql.js';
+
+export interface Migration {
+  readonly version: number;
+  readonly name: string;
+  /** Run one at a time, in order. One statement each: no `;`-joined batches. */
+  readonly statements: readonly string[];
+}
+
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    name: 'base',
+    statements: [
+      // The project itself: one row, written only by init (rule H11).
+      `CREATE TABLE meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        project_id TEXT NOT NULL,
+        recovery_epoch TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+      // Every record in this project with its current version. References are resolved and
+      // record versions compared against this table (stress A01, E01). Record-specific tables
+      // arrive with the issues that own them.
+      `CREATE TABLE records (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version >= 1),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+      // The ordered event log. `seq` is the rowid, so it is its own index, and AUTOINCREMENT
+      // means a sequence number is never reused after older events are compacted.
+      `CREATE TABLE events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        recovery_epoch TEXT NOT NULL,
+        type TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        record_version INTEGER NOT NULL,
+        actor TEXT NOT NULL,
+        source TEXT NOT NULL,
+        causal_request_id TEXT NOT NULL,
+        server_time TEXT NOT NULL,
+        payload TEXT NOT NULL
+      )`,
+      // Delivery intent, written in the same transaction as its event (rule H05, stress C03).
+      `CREATE TABLE outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_seq INTEGER NOT NULL REFERENCES events (seq),
+        state TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'dead')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+      'CREATE INDEX outbox_by_state_next_attempt ON outbox (state, next_attempt_at)',
+      // Server-issued retry permits (rule H04). Issued and checked by #11.
+      `CREATE TABLE command_windows (
+        id TEXT PRIMARY KEY,
+        principal_key TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        recovery_epoch TEXT NOT NULL,
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      )`,
+      'CREATE INDEX command_windows_by_principal ON command_windows (principal_key, expires_at)',
+      // One receipt per committed command, keyed by who sent it (invariant 5).
+      `CREATE TABLE command_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        principal_key TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        command_type TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('committed', 'rejected')),
+        result TEXT NOT NULL,
+        first_seq INTEGER,
+        last_seq INTEGER,
+        -- Null only for project creation, which happens before any window can exist.
+        command_window_id TEXT,
+        created_at TEXT NOT NULL
+      )`,
+      'CREATE UNIQUE INDEX command_receipts_by_principal_request ON command_receipts (principal_key, request_id)',
+    ],
+  },
+];
+
+export type MigrationState =
+  | { readonly status: 'empty' }
+  | { readonly status: 'ready'; readonly version: number; readonly applied: readonly number[] }
+  | { readonly status: 'failed'; readonly version: number; readonly reason: string };
+
+/** The highest recorded migration, or 0 when storage has never been migrated. */
+export function schemaVersion(sql: SqlPort): number {
+  if (!tableExists(sql, 'schema_migrations')) return 0;
+  return first(sql.exec<{ v: number | null }>('SELECT max(version) AS v FROM schema_migrations'))?.v ?? 0;
+}
+
+/**
+ * Applies every pending migration in order. Returns `failed` instead of throwing, with the
+ * schema left at the last migration that committed.
+ */
+export function applyMigrations(
+  storage: StoragePort,
+  migrations: readonly Migration[] = MIGRATIONS,
+  now: () => string = () => new Date().toISOString(),
+): MigrationState {
+  const known = migrations.at(-1)?.version ?? 0;
+  let version = schemaVersion(storage.sql);
+  if (version > known) {
+    return {
+      status: 'failed',
+      version,
+      reason: `storage is at schema ${version}, this build knows ${known}`,
+    };
+  }
+  const applied: number[] = [];
+  for (const migration of migrations) {
+    if (migration.version <= version) continue;
+    try {
+      storage.transactionSync(() => {
+        storage.sql.exec(
+          `CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+          )`,
+        );
+        for (const statement of migration.statements) storage.sql.exec(statement);
+        storage.sql.exec(
+          'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
+          migration.version,
+          migration.name,
+          now(),
+        );
+      });
+    } catch (error) {
+      return {
+        status: 'failed',
+        version,
+        reason: `migration ${migration.version} (${migration.name}) failed: ${describe(error)}`,
+      };
+    }
+    version = migration.version;
+    applied.push(migration.version);
+  }
+  return { status: 'ready', version, applied };
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown error';
+}
