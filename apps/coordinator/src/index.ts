@@ -8,14 +8,16 @@ import { handleRequest, type CoordinatorStub } from './worker/router.js';
 
 export { ProjectCoordinator };
 
-// The RPC stub is cast to CoordinatorStub below; this fails to compile if the object's method
-// stops matching what the router calls.
-type StubMatches = ProjectCoordinator['applyCommand'] extends (
-  ...args: Parameters<CoordinatorStub['applyCommand']>
-) => Awaited<ReturnType<CoordinatorStub['applyCommand']>>
-  ? true
-  : never;
-const stubMatches: StubMatches = true;
+// The RPC stub is cast to CoordinatorStub below; this fails to compile if any of the object's
+// methods stops matching what the routes call.
+type StubMatches = {
+  [K in keyof CoordinatorStub]: ProjectCoordinator[K] extends (
+    ...args: Parameters<CoordinatorStub[K]>
+  ) => Awaited<ReturnType<CoordinatorStub[K]>>
+    ? true
+    : never;
+};
+const stubMatches: StubMatches = { applyCommand: true, issueCommandWindow: true, readReceipt: true };
 void stubMatches;
 
 interface Env {

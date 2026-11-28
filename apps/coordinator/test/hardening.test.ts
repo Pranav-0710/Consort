@@ -20,6 +20,7 @@ import {
 } from '../src/mutations/apply.js';
 import type { Principal } from '../src/mutations/principal.js';
 import { createRegistry, DENY_ALL, defineHandler } from '../src/mutations/registry.js';
+import { DEFAULT_RETRY_CONFIG } from '../src/mutations/windows.js';
 
 import {
   ALICE,
@@ -36,6 +37,7 @@ import {
   seedRecord,
   setup,
   tableAuthority,
+  expectOnlyRejectedReceipts,
 } from './support/harness.js';
 import { memoryStorage, snapshot } from './support/sqlite.js';
 
@@ -97,6 +99,7 @@ describe('agent identity binding', () => {
   it('an agent whose run the authority port has not verified writes nothing', () => {
     const { core, storage, epoch } = setup({
       members: [[aliceAgent, member('contributor', { scope: 'project' })]],
+      issueWindows: false,
     });
     seedRecord(storage, 'question', QUESTION);
     expect(core.applyCommand(aliceAgent, answer(epoch, { agent: true }))).toMatchObject({
@@ -124,7 +127,7 @@ describe('agent identity binding', () => {
       ok: false,
       error: { code: 'not_authorized' },
     });
-    expect(snapshot(storage.db)).toEqual(before);
+    expectOnlyRejectedReceipts(storage, before, 1);
   });
 
   it('command text that is not a string is refused, never thrown', () => {
@@ -185,18 +188,20 @@ describe('credential scope', () => {
     });
     const { core, storage, authority, epoch } = setup({ handlers: [retrieval] });
     seedRecord(storage, 'handoff', HANDOFF);
-    const text = commandText(
-      'handoff.record_retrieval',
-      { handoff_id: HANDOFF, result: 'matched' },
-      { epoch },
-    );
+    // A window is bound to the scope it was issued under, so each attempt names the current one.
+    const text = () =>
+      commandText(
+        'handoff.record_retrieval',
+        { handoff_id: HANDOFF, result: 'matched' },
+        { epoch, as: collector },
+      );
     authority.set(collector, member('contributor', { scope: [] }));
-    expect(core.applyCommand(collector, text)).toMatchObject({
+    expect(core.applyCommand(collector, text())).toMatchObject({
       ok: false,
       error: { code: 'not_authorized' },
     });
     authority.set(collector, member('contributor', { scope: [PACKAGE] }));
-    expect(core.applyCommand(collector, text)).toMatchObject({ ok: true });
+    expect(core.applyCommand(collector, text())).toMatchObject({ ok: true });
     const row = storage.db.prepare("SELECT actor, source FROM events WHERE type = 'handoff.retrieved'").get();
     expect(row).toEqual({
       actor: JSON.stringify({ kind: 'evidence_collector', collector_id: COLLECTOR }),
@@ -310,7 +315,7 @@ describe('ownership and expected versions', () => {
       ok: false,
       error: { code: 'not_authorized' },
     });
-    expect(snapshot(storage.db)).toEqual(before);
+    expectOnlyRejectedReceipts(storage, before, 1);
   });
 
   it('a stale contract pin on an existing contract gets stale_version', () => {
@@ -421,7 +426,11 @@ describe('transaction details', () => {
     });
     expect(() =>
       storage.transactionSync(() =>
-        runMutation(storage.sql, registry, collector, command, new Date().toISOString()),
+        runMutation(storage.sql, registry, collector, command, {
+          now: new Date().toISOString(),
+          retry: DEFAULT_RETRY_CONFIG,
+          progress: {},
+        }),
       ),
     ).toThrow('principal_not_allowed');
   });

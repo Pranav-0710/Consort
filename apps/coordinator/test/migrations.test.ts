@@ -5,8 +5,9 @@ import { applyMigrations, MIGRATIONS, schemaVersion, type Migration } from '../s
 import { ALICE, alice, commandText, PROJECT, requestId, setup } from './support/harness.js';
 import { memoryStorage, snapshot } from './support/sqlite.js';
 
+const LATEST = MIGRATIONS.length;
 const BROKEN: Migration = {
-  version: 2,
+  version: LATEST + 1,
   name: 'broken',
   statements: ['CREATE TABLE ok_part (x)', 'NOT SQL AT ALL'],
 };
@@ -40,8 +41,8 @@ describe('schema migrations', () => {
     const before = snapshot(storage.db);
 
     const upgraded = setup({ storage, init: false, migrations: [...MIGRATIONS, BROKEN] });
-    expect(upgraded.core.state).toMatchObject({ status: 'failed', version: 1 });
-    expect(schemaVersion(storage.sql)).toBe(1);
+    expect(upgraded.core.state).toMatchObject({ status: 'failed', version: LATEST });
+    expect(schemaVersion(storage.sql)).toBe(LATEST);
     // The failed migration's first statement was rolled back with it.
     expect(snapshot(storage.db)).toEqual(before);
 
@@ -58,14 +59,39 @@ describe('schema migrations', () => {
     expect(snapshot(storage.db)).toEqual(before);
   });
 
+  it('a window or receipt request on a failed, newer-schema or empty object writes nothing', () => {
+    const storage = memoryStorage();
+    setup({ storage, migrations: [...MIGRATIONS, { version: LATEST + 1, name: 'newer', statements: [] }] });
+    const before = snapshot(storage.db);
+    const older = setup({ storage, init: false });
+    expect(older.core.state).toMatchObject({ status: 'failed' });
+    expect(older.core.issueCommandWindow(alice)).toMatchObject({
+      ok: false,
+      error: { code: 'project_unavailable' },
+    });
+    expect(older.core.readReceipt(alice, requestId())).toMatchObject({
+      ok: false,
+      error: { code: 'project_unavailable' },
+    });
+    expect(snapshot(storage.db)).toEqual(before);
+
+    const empty = setup({ init: false });
+    expect(empty.core.issueCommandWindow(alice)).toMatchObject({
+      ok: false,
+      error: { code: 'project_not_found' },
+    });
+    expect(snapshot(empty.storage.db)).toEqual({});
+    expect(empty.errors).toEqual([]);
+  });
+
   it('storage written by a newer build is refused rather than served (G06)', () => {
     const storage = memoryStorage();
     const { epoch } = setup({
       storage,
-      migrations: [...MIGRATIONS, { version: 2, name: 'newer', statements: [] }],
+      migrations: [...MIGRATIONS, { version: LATEST + 1, name: 'newer', statements: [] }],
     });
     const older = setup({ storage, init: false });
-    expect(older.core.state).toMatchObject({ status: 'failed', version: 2 });
+    expect(older.core.state).toMatchObject({ status: 'failed', version: LATEST + 1 });
     expect(older.core.applyCommand(alice, commandText('feature.create', FEATURE, { epoch }))).toMatchObject({
       ok: false,
       error: { code: 'project_unavailable' },

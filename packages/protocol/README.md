@@ -24,6 +24,7 @@ One command shape, one table of who may send each command, and one validator, sh
 | `status.ts` | `RunStatus` with one field per dimension and no combined status. |
 | `capabilities.ts` | Capability flags, each documented, detected, verified or disabled with a reason. |
 | `frames.ts`, `gap.ts` | WebSocket frames (agents get `AgentServerFrameSchema`, which has no raw events), and `checkSequence`, which tells a client to apply, ignore, fetch a gap or resync. |
+| `receipts.ts` | `CommandWindow` (issued window: ID, recovery epoch, expiry) and `ReceiptStatus` (committed, rejected or unknown) for safe retries. |
 | `cursor.ts` | The opaque `Cursor` string. Its claims helpers are exported only from `@consort/protocol/internal`, for the coordinator. |
 
 ## Rules it encodes

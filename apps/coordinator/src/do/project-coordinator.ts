@@ -2,7 +2,7 @@
 //
 // A thin wrapper: all logic is in CoordinatorCore, which is tested against the same SQL
 // semantics. Migrations run in blockConcurrencyWhile, so no request is served before the schema
-// is current. Both RPC methods are synchronous end to end, so no other request can interleave
+// is current. Every RPC method is synchronous end to end, so no other request can interleave
 // with a mutation's checks and writes.
 import { DurableObject } from 'cloudflare:workers';
 
@@ -10,7 +10,14 @@ import type { StoragePort } from '../db/sql.js';
 import type { Principal } from '../mutations/principal.js';
 import { PRODUCTION_REGISTRY } from '../mutations/production.js';
 
-import { CoordinatorCore, type ApplyResult, type InitInput, type InitResult } from './core.js';
+import {
+  CoordinatorCore,
+  type ApplyResult,
+  type InitInput,
+  type InitResult,
+  type ReceiptResult,
+  type WindowResult,
+} from './core.js';
 
 function storagePort(storage: DurableObjectStorage): StoragePort {
   return {
@@ -43,5 +50,15 @@ export class ProjectCoordinator extends DurableObject {
   /** The principal is derived by the Worker from authentication, never read from the command. */
   applyCommand(principal: Principal, commandText: string): ApplyResult {
     return this.#core.applyCommand(principal, commandText);
+  }
+
+  /** Issues a command window for the authenticated principal (#11). */
+  issueCommandWindow(principal: Principal): WindowResult {
+    return this.#core.issueCommandWindow(principal);
+  }
+
+  /** The principal's own receipt for a request (#11). */
+  readReceipt(principal: Principal, requestId: string): ReceiptResult {
+    return this.#core.readReceipt(principal, requestId);
   }
 }

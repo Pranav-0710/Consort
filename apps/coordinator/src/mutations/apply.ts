@@ -5,13 +5,16 @@
 //   1. current membership or credential status, the agent's connection and run binding, and
 //      then the recovery epoch (after membership, so a non-member learns nothing about it)
 //   2. the catalogue: principal kind, minimum role, and a registered handler
-//   3. credential scope, for agents and collectors; then that the request ID is unused
+//   3. credential scope, for agents and collectors; the command window (#11); then the request
+//      ID: an identical retry returns its retained outcome here and writes nothing, a reused ID
+//      with different content is refused, and a new one needs room for its receipt
 //   4. every referenced ID resolves inside this project, as the right kind of record; then the
 //      ownership rule, which needs resolved references
 //   5. every expected version, including the authority versions
 // then runs the handler, writing each event and its outbox row as the handler emits it, and
 // finally the receipt. Any refusal or throw rolls the whole transaction back, so nothing
-// partial is ever visible. The caller responds and broadcasts only after commit.
+// partial is ever visible. The caller responds and broadcasts only after commit, and records a
+// rejected receipt for refusals that came after the request-ID check (`progress.receipt`).
 import {
   CATALOGUE,
   EventRecordSchema,
@@ -31,8 +34,10 @@ import {
 
 import { first, type SqlPort } from '../db/sql.js';
 
+import { Rejection } from './errors.js';
 import { newId } from './ids.js';
 import { actorFor, principalKey, sourceFor, type Principal } from './principal.js';
+import { checkRequest, writeReceipt, type Retained } from './receipts.js';
 import type {
   Authority,
   CheckInput,
@@ -40,19 +45,36 @@ import type {
   MutationContext,
   MutationRegistry,
 } from './registry.js';
+import { checkWindow, type RetryConfig } from './windows.js';
 
-/** A refusal raised inside the transaction. Throwing it is what rolls the writes back. */
-export class Rejection extends Error {
-  constructor(readonly error: ProtocolError) {
-    super(error.code);
-    this.name = 'Rejection';
-  }
-}
+export { Rejection };
 
 export interface Committed {
   readonly request_id: string;
   readonly events: readonly EventRecord[];
   readonly result: Record<string, unknown>;
+}
+
+export type MutationOutcome =
+  | ({ readonly kind: 'committed' } & Committed)
+  | { readonly kind: 'replayed'; readonly request_id: string; readonly retained: Retained };
+
+/** The receipt a refusal from this point on is recorded under, so a retry gets the same answer. */
+export interface PendingReceipt {
+  readonly principalKey: string;
+  readonly requestId: string;
+  readonly commandType: string;
+  readonly contentHash: string;
+  readonly windowId: string;
+  readonly scope: string;
+  readonly retainUntil: string;
+}
+
+export interface MutationOptions {
+  readonly now: string;
+  readonly retry: RetryConfig;
+  /** Set by runMutation once a refusal should leave a rejected receipt. */
+  readonly progress: { receipt?: PendingReceipt };
 }
 
 export interface ProjectMeta {
@@ -106,8 +128,8 @@ export function runMutation(
   registry: MutationRegistry,
   principal: Principal,
   command: ValidatedCommand,
-  now: string,
-): Committed {
+  options: MutationOptions,
+): MutationOutcome {
   // The handle every check and the handler use. It stops working when this function returns,
   // so code that tries to write later, outside the transaction, fails instead of writing.
   let open = true;
@@ -118,7 +140,7 @@ export function runMutation(
     },
   };
   try {
-    return run(guarded, registry, principal, command, now);
+    return run(guarded, registry, principal, command, options);
   } finally {
     open = false;
   }
@@ -129,8 +151,9 @@ function run(
   registry: MutationRegistry,
   principal: Principal,
   command: ValidatedCommand,
-  now: string,
-): Committed {
+  options: MutationOptions,
+): MutationOutcome {
+  const { now } = options;
   const envelope = command.envelope;
 
   // 0. The project. A command for an ID this object does not hold reveals nothing about it.
@@ -157,17 +180,38 @@ function run(
   // 3. Scope. A person's membership covers the project; a credential covers what it names.
   if (principal.kind !== 'human') checkScope(handler, input, authority);
 
-  // Any cached outcome #11 returns for an identical retry must be returned here or later:
-  // only after current membership, role and scope have passed again (rule H04).
+  // The command window, checked against current standing and the current epoch.
+  const window = checkWindow(sql, {
+    windowId: envelope.command_window_id,
+    principal,
+    authority,
+    recoveryEpoch: meta.recovery_epoch,
+    now,
+  });
+
+  // The request ID. A retained outcome is returned only here, after current membership, role,
+  // scope and window have all passed again (rule H04, stress E02).
   const key = principalKey(principal);
-  const used = first(
-    sql.exec<{ n: number }>(
-      'SELECT count(*) AS n FROM command_receipts WHERE principal_key = ? AND request_id = ?',
-      key,
-      envelope.request_id,
-    ),
-  );
-  if ((used?.n ?? 0) > 0) reject('request_id_conflict', 'request_id');
+  const retained = checkRequest(sql, {
+    principalKey: key,
+    requestId: envelope.request_id,
+    contentHash: command.contentHash,
+    windowId: envelope.command_window_id,
+    now,
+    config: options.retry,
+  });
+  if (retained !== undefined) return { kind: 'replayed', request_id: envelope.request_id, retained };
+  const retainUntil = new Date(Date.parse(window.expiresAt) + options.retry.graceMs).toISOString();
+  const pending: PendingReceipt = {
+    principalKey: key,
+    requestId: envelope.request_id,
+    commandType: command.type,
+    contentHash: command.contentHash,
+    windowId: envelope.command_window_id,
+    scope: window.scope,
+    retainUntil,
+  };
+  options.progress.receipt = pending;
 
   // 4. References, then ownership.
   const references = collectReferences(command.payload);
@@ -243,22 +287,15 @@ function run(
   const result = (output as { result?: Record<string, unknown> } | undefined)?.result ?? {};
 
   // 7. The receipt, in the same transaction as the change, its events and outbox rows.
-  sql.exec(
-    `INSERT INTO command_receipts
-      (principal_key, request_id, command_type, content_hash, outcome, result, first_seq, last_seq,
-       command_window_id, created_at)
-     VALUES (?, ?, ?, ?, 'committed', ?, ?, ?, ?, ?)`,
-    key,
-    envelope.request_id,
-    command.type,
-    command.contentHash,
-    JSON.stringify(result),
-    written[0]?.seq ?? null,
-    written.at(-1)?.seq ?? null,
-    envelope.command_window_id,
+  writeReceipt(sql, {
+    ...pending,
+    outcome: 'committed',
+    body: result,
+    firstSeq: written[0]?.seq ?? null,
+    lastSeq: written.at(-1)?.seq ?? null,
     now,
-  );
-  return { request_id: envelope.request_id, events: written, result };
+  });
+  return { kind: 'committed', request_id: envelope.request_id, events: written, result };
 }
 
 /**

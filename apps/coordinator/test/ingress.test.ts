@@ -3,12 +3,19 @@ import { describe, expect, it } from 'vitest';
 
 import type { ApplyResult } from '../src/do/core.js';
 import type { Principal } from '../src/mutations/principal.js';
-import { handleRequest, type RouterDeps } from '../src/worker/router.js';
+import { handleRequest, type CoordinatorStub, type RouterDeps } from '../src/worker/router.js';
 
 import { alice, BLAIR, commandText, OTHER_PROJECT, PROJECT, setup } from './support/harness.js';
 
 const FEATURE = { title: 'Checkout', goal: 'Ship checkout' };
 const URL_FOR = (project: string) => `https://coordinator.test/v1/projects/${project}/commands`;
+
+/** A stub whose every call fails, as a lost connection to the object would. */
+const failing: CoordinatorStub = {
+  applyCommand: () => Promise.reject(new Error('must not be called')),
+  issueCommandWindow: () => Promise.reject(new Error('must not be called')),
+  readReceipt: () => Promise.reject(new Error('must not be called')),
+};
 
 /** A Worker wired to a real core, recording what reaches the object. */
 function worker(principal: Principal | null) {
@@ -24,6 +31,8 @@ function worker(principal: Principal | null) {
           received.push({ principal: p, text });
           return Promise.resolve(fixture.core.applyCommand(p, text));
         },
+        issueCommandWindow: (p) => Promise.resolve(fixture.core.issueCommandWindow(p)),
+        readReceipt: (p, request) => Promise.resolve(fixture.core.readReceipt(p, request)),
       };
     },
   };
@@ -107,7 +116,7 @@ describe('Worker ingress', () => {
     const { fixture, received } = worker(alice);
     const deps: RouterDeps = {
       authenticate: () => Promise.resolve(alice),
-      coordinatorFor: () => ({ applyCommand: () => Promise.reject(new Error('must not be called')) }),
+      coordinatorFor: () => failing,
     };
     const body = commandText('feature.create', FEATURE, { epoch: fixture.epoch });
     for (const [url, method, status] of [
@@ -126,6 +135,7 @@ describe('Worker ingress', () => {
     const deps: RouterDeps = {
       authenticate: () => Promise.resolve(alice),
       coordinatorFor: () => ({
+        ...failing,
         applyCommand: (): Promise<ApplyResult> =>
           Promise.resolve({ ok: false, error: { code: 'internal_error', message: 'nothing changed' } }),
       }),
@@ -146,6 +156,7 @@ describe('Worker ingress', () => {
     const deps: RouterDeps = {
       authenticate: () => Promise.resolve(alice),
       coordinatorFor: () => ({
+        ...failing,
         applyCommand: (): Promise<ApplyResult> => Promise.reject(new Error('reset')),
       }),
     };
