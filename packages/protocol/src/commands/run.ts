@@ -2,6 +2,7 @@
 // registration, never from the payload, so none of these carries a package or user ID.
 import { z } from 'zod';
 
+import { ACKNOWLEDGEMENT_KINDS, type DeliveryObservationKind } from '../delivery.js';
 import { idSchema } from '../ids.js';
 import { LIMITS } from '../limits.js';
 import {
@@ -39,17 +40,23 @@ export const runPayloads = {
 
   /** Facts 3 and 5: what the agent itself reports. Delivery facts use `delivery.observe`. */
   'acknowledgement.record': z.strictObject({
-    kind: z.enum(['agent_acknowledged', 'application_reported']),
+    kind: z.enum(ACKNOWLEDGEMENT_KINDS),
     versions: basedOn,
     change_request_id: idSchema('change_request').optional(),
     concerns: reasonText.optional(),
     evidence_ids: boundedList(idSchema('evidence')).optional(),
   }),
 
-  /** Placeholder for #9 and #35: facts 1 and 2, reported by the adapter, not the model. */
+  /**
+   * Placeholder for #35: facts 1 and 2, reported by the adapter, not the model. `queued` is
+   * recorded by the coordinator itself, so an adapter cannot report it.
+   */
   'delivery.observe': z.strictObject({
     item_id: idSchema('inbox_item'),
-    observation: z.enum(['adapter_received', 'context_supplied']),
+    observation: z.enum([
+      'adapter_received',
+      'context_supplied',
+    ] as const satisfies readonly DeliveryObservationKind[]),
     checkpoint: shortText.optional(),
   }),
 

@@ -25,5 +25,7 @@ One command shape, one table of who may send each command, and one validator, sh
 - An agent run's work package comes from its registration, never from the payload.
 - Owner decisions (accept, reject, reconcile, transfer) require the target, ownership and membership versions, and are never open to agent runs.
 - No command approves or merges a pull request or changes a client's local tool permissions.
+- Delivery, context supplied, acknowledgement, adoption, reported implementation and verification never share a field or schema.
+- Clients never read cursor claims. Lint does not yet stop a client importing `@consort/protocol/internal`; review does.
 
 Passing validation proves shape only. The coordinator still checks membership, role, ownership, the command window and every expected version inside its transaction (#10, #11).
